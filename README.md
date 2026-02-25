@@ -19,11 +19,11 @@ The worker serves multiple brands from a single deployment. It selects the brand
 
 | Hostname | Brand |
 |----------|-------|
-| `intake.platform21.com.au` | Platform21 |
-| `intake.ecomow.com.au` | EcoMow |
-| All other hosts | Platform21 (default) |
+| `intake.example.com` | Acme Agency |
+| `intake.other-brand.com.au` | Other Brand |
+| All other hosts | Default brand |
 
-Each brand applies its own name, tagline, primary colour, and footer text to the form interface. Brand configuration lives in `src/lib/brands.ts`.
+Each brand applies its own name, tagline, primary colour, and footer text to the form interface. Add or modify brands in `src/lib/brands.ts`. The `getBrand()` function matches the request hostname and returns the appropriate configuration.
 
 ## API reference
 
@@ -51,7 +51,7 @@ POST /api/intake
 {
   "id": "uuid",
   "token": "abc123...",
-  "url": "https://intake.platform21.com.au/abc123...",
+  "url": "https://intake.example.com/abc123...",
   "expires_at": "2026-03-27T00:00:00.000Z"
 }
 ```
