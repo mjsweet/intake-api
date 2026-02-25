@@ -362,6 +362,20 @@ npx wrangler secret put DATABASE_URL
 
 The `wrangler.toml` file defines the route patterns. Update these to match your domain configuration.
 
+## How this differs from other human-in-the-loop tools
+
+Most human-in-the-loop patterns assume the human is the agent operator. This project assumes the human is someone else entirely — a client, a stakeholder, or a domain expert who has no access to the agent's session and no idea an agent is involved.
+
+| Project | Who responds | Interface | Direction |
+|---------|-------------|-----------|-----------|
+| **Intake API** | External person (client, stakeholder) | Branded web form at a token URL | Agent sends structured questions out, retrieves structured answers back |
+| [Agent Inbox](https://github.com/langchain-ai/agent-inbox) (LangChain) | Agent operator | Developer dashboard for LangGraph interrupts | Operator reviews and resumes paused agent runs |
+| [HumanLayer](https://github.com/humanlayer/humanlayer) | Team members | Slack, email, or Discord notifications | Agent requests approve/reject decisions from internal users |
+| [OpenAI Agents SDK](https://openai.github.io/openai-agents-js/guides/human-in-the-loop/) | Agent operator | Terminal prompt | Operator approves or denies tool calls |
+| [Cloudflare Agents SDK + Knock](https://blog.cloudflare.com/building-agents-at-knock-agents-sdk/) | Team members | Push notifications via Knock | Agent requests approval through notification channels |
+
+The other key difference is **pre-filling**. The agent does its research first — scraping public data, querying business registries, gathering social profiles — and populates the form with what it already knows. The external person verifies and corrects rather than starting from a blank page. None of the projects above include this pattern.
+
 ## Security considerations
 
 - **Secrets**: The `.dev.vars` file contains database credentials and must not be committed. It is listed in `.gitignore`.
