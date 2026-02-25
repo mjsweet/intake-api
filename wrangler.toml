@@ -9,6 +9,9 @@ routes = [
   { pattern = "intake.ecomow.com.au/*", zone_name = "ecomow.com.au" }
 ]
 
+# Secrets (set via `wrangler secret put`):
+# - INTAKE_API_KEY: Bearer token for /api/* routes
+
 [vars]
 ENVIRONMENT = "production"
 

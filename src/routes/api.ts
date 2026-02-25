@@ -5,9 +5,13 @@ import { eq } from "drizzle-orm";
 import { intakeRecords, intakeFiles } from "../schema";
 import { generateToken } from "../lib/tokens";
 import { uploadToR2, downloadFromR2, buildR2Key } from "../lib/storage";
+import { authMiddleware } from "../middleware/auth";
 import type { Env } from "../index";
 
 const api = new Hono<{ Bindings: Env }>();
+
+// Require bearer token for all API routes
+api.use("*", authMiddleware);
 
 function getDb(c: { env: Env }) {
   const sql = neon(c.env.DATABASE_URL);

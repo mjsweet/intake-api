@@ -6,6 +6,7 @@ import formRoutes from "./routes/form";
 export interface Env {
   DATABASE_URL: string;
   INTAKE_BUCKET: R2Bucket;
+  INTAKE_API_KEY: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();

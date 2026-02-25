@@ -31,9 +31,21 @@ The worker serves multiple brands from a single deployment. It selects the brand
 
 Each brand applies its own name, tagline, primary colour, and footer text to the form interface. Add or modify brands in `src/lib/brands.ts`. The `getBrand()` function matches the request hostname and returns the appropriate configuration.
 
+## Authentication
+
+All `/api/*` endpoints require a bearer token. Include the `Authorization` header in every request:
+
+```
+Authorization: Bearer <your-api-key>
+```
+
+The API key is stored as a Cloudflare Worker secret (`INTAKE_API_KEY`). Requests without a valid token receive `401 Unauthorized` or `403 Forbidden`.
+
+Client-facing form pages (`/:token`, `/:token/verify`, `/:token/thanks`) do not require the API key â€” they are protected by an optional PIN instead.
+
 ## API reference
 
-All API endpoints are prefixed with `/api`. Request and response bodies use JSON unless otherwise noted.
+All API endpoints are prefixed with `/api`. Request and response bodies use JSON unless otherwise noted. Every request must include the `Authorization: Bearer <key>` header.
 
 ### Create an intake form
 
@@ -289,6 +301,7 @@ src/
   schema/
     index.ts            # Drizzle ORM table definitions
   middleware/
+    auth.ts             # Bearer token auth for API routes
     cors.ts             # CORS middleware
 drizzle/                # Generated migration files
 wrangler.toml           # Cloudflare Worker configuration
@@ -354,10 +367,11 @@ export CLOUDFLARE_ACCOUNT_ID=your-account-id
 npm run deploy
 ```
 
-Set the `DATABASE_URL` secret in Cloudflare:
+Set the secrets in Cloudflare:
 
 ```bash
 npx wrangler secret put DATABASE_URL
+npx wrangler secret put INTAKE_API_KEY
 ```
 
 The `wrangler.toml` file defines the route patterns. Update these to match your domain configuration.
@@ -378,7 +392,8 @@ The other key difference is **pre-filling**. The agent does its research first â
 
 ## Security considerations
 
-- **Secrets**: The `.dev.vars` file contains database credentials and must not be committed. It is listed in `.gitignore`.
+- **API authentication**: All `/api/*` routes require a bearer token (`INTAKE_API_KEY`). Client-facing form pages are exempt.
+- **Secrets**: The `.dev.vars` file contains database credentials and the API key, and must not be committed. It is listed in `.gitignore`.
 - **Tokens**: Access tokens use a 24-character alphanumeric string generated from `crypto.getRandomValues()`. The alphabet excludes ambiguous characters (0, O, 1, l, I).
 - **Password protection**: Form passwords are hashed with SHA-256 before storage. This is appropriate for low-sensitivity PINs shared via email, not for user account credentials.
 - **File uploads**: Limited to 10 MB per file. Filenames are sanitised to alphanumeric characters, dots, hyphens, and underscores.

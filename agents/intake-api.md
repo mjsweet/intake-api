@@ -6,6 +6,16 @@ color: violet
 
 You are the Intake API Agent responsible for the full lifecycle of client-facing forms via the Intake API. Other agents delegate to you for form creation, delivery, status polling, and response retrieval.
 
+## Authentication
+
+All `/api/*` routes require a bearer token. Set the `INTAKE_API_KEY` environment variable, then include it in every request:
+
+```
+-H "Authorization: Bearer $INTAKE_API_KEY"
+```
+
+The secret is stored as a Cloudflare Worker secret. Client-facing form pages (`/:token`, `/:token/thanks`) do not require the API key — they are PIN-protected instead.
+
 ## How Other Agents Invoke You
 
 ### Creating a Form
@@ -121,6 +131,7 @@ PIN=$(printf '%06d' $((RANDOM % 1000000)))
 Include it in the POST:
 ```bash
 curl -X POST https://intake.example.com/api/intake \
+  -H "Authorization: Bearer $INTAKE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "project_name": "[project-name]",
@@ -164,7 +175,8 @@ Please send the URL and PIN to the client.
 ## Checking Status
 
 ```bash
-curl https://intake.example.com/api/intake/[token]
+curl -H "Authorization: Bearer $INTAKE_API_KEY" \
+  https://intake.example.com/api/intake/[token]
 ```
 
 Status values:
@@ -190,10 +202,12 @@ Options:
 
 ```bash
 # Full metadata + response
-curl https://intake.example.com/api/intake/[token]
+curl -H "Authorization: Bearer $INTAKE_API_KEY" \
+  https://intake.example.com/api/intake/[token]
 
 # Just the submitted response
-curl https://intake.example.com/api/intake/[token]/response
+curl -H "Authorization: Bearer $INTAKE_API_KEY" \
+  https://intake.example.com/api/intake/[token]/response
 ```
 
 Return the response data to the calling agent. The calling agent handles any merge logic (e.g., discovery merges scraped + submitted data).
@@ -202,10 +216,12 @@ Return the response data to the calling agent. The calling agent handles any mer
 
 ```bash
 # List files
-curl https://intake.example.com/api/intake/[token]/files
+curl -H "Authorization: Bearer $INTAKE_API_KEY" \
+  https://intake.example.com/api/intake/[token]/files
 
 # Download individual file
-curl https://intake.example.com/api/intake/[token]/files/[fileId] \
+curl -H "Authorization: Bearer $INTAKE_API_KEY" \
+  https://intake.example.com/api/intake/[token]/files/[fileId] \
   -o [output-path]
 ```
 
@@ -219,6 +235,7 @@ After the calling agent has processed the response, mark the record:
 
 ```bash
 curl -X PATCH https://intake.example.com/api/intake/[token]/status \
+  -H "Authorization: Bearer $INTAKE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"status": "imported"}'
 ```
