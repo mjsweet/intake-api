@@ -4,6 +4,8 @@ A Cloudflare Worker that serves dynamic client intake forms and a RESTful API fo
 
 Built with Hono, NEON Postgres (via Drizzle ORM), and Cloudflare R2 for file storage.
 
+For the design rationale behind this approach, read [Giving AI Coding Agents an Inbox](https://www.userhat.com/giving-ai-coding-agents-an-inbox/).
+
 ## How it works
 
 1. An agent sends a `POST /api/intake` request with a form definition (fields, sections, pre-filled values).
