@@ -252,6 +252,84 @@ curl -X DELETE -H "Authorization: Bearer $INTAKE_API_KEY" \
   https://intake.example.com/api/intake/[token]
 ```
 
+> **Note:** DELETE is for cleanup (test forms, duplicates, data removal requests). Do not delete records as part of the standard workflow — the `imported` status signals completion and the record serves as an audit trail until it expires.
+
+---
+
+## Local Audit Trail
+
+Every API interaction must be logged locally so there is a permanent record even after the remote data expires (30 days) or is deleted.
+
+### Directory Structure
+
+```
+outputs/[project-name]/
+  intake/
+    [token]/
+      audit.jsonl           # Append-only log of every API call
+      definition.json       # Copy of form definition sent to API
+      response.json         # Copy of submitted response retrieved from API
+      files/                # Downloaded uploads
+```
+
+The calling agent passes the project directory (e.g., `outputs/acme-plumbing`). Use it to derive the audit path.
+
+### When to Log
+
+After **every** curl call to the intake API, append a single JSON line to `audit.jsonl`:
+
+```json
+{"ts":"2026-02-25T10:37:41Z","action":"create","method":"POST","path":"/api/intake","status":"draft","request":{...},"response":{...}}
+```
+
+Field reference:
+
+| Field | Value |
+|-------|-------|
+| `ts` | ISO 8601 timestamp |
+| `action` | `create`, `status_check`, `retrieve_response`, `retrieve_definition`, `list_files`, `download_file`, `mark_imported`, `delete` |
+| `method` | HTTP method used |
+| `path` | API path (with token substituted) |
+| `status` | Current record status after the call (if known) |
+| `request` | Relevant request payload (omit large bodies — summarise form_definition as `{"title":"...","sections":N}`) |
+| `response` | Relevant response payload (omit large bodies — summarise as needed) |
+
+### What to Save
+
+1. **After form creation (POST):** Create the audit directory, save the full form definition to `definition.json`, and log the create action.
+2. **After status checks (GET metadata):** Log the status_check action with current status.
+3. **After retrieving response (GET response):** Save the full response to `response.json` and log the retrieve_response action.
+4. **After downloading files:** Save files to `files/` and log each download_file action.
+5. **After marking imported (PATCH):** Log the mark_imported action.
+6. **After deletion (DELETE):** Log the delete action (the audit directory remains as the permanent record).
+
+### Implementation
+
+Before the first curl call, create the directory:
+
+```bash
+AUDIT_DIR="[project-dir]/intake/[token]"
+mkdir -p "$AUDIT_DIR/files"
+```
+
+After each curl call, append the log line:
+
+```bash
+echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","action":"create","method":"POST","path":"/api/intake","status":"draft","request":{"project_name":"..."},"response":{"token":"...","url":"..."}}' >> "$AUDIT_DIR/audit.jsonl"
+```
+
+For definition and response copies, use the Write tool or redirect curl output:
+
+```bash
+# Save form definition after creation
+echo '$FORM_DEFINITION' > "$AUDIT_DIR/definition.json"
+
+# Save response after retrieval
+curl -H "Authorization: Bearer $INTAKE_API_KEY" \
+  https://intake.example.com/api/intake/[token]/response \
+  -o "$AUDIT_DIR/response.json"
+```
+
 ---
 
 ## Error Handling
