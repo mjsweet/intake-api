@@ -161,6 +161,8 @@ DELETE /api/intake/:token
 
 Deletes the intake record, all associated files (from R2 and the database), the form definition, and the submitted response. Returns the count of deleted files.
 
+> **Note:** DELETE is for cleanup — test forms, duplicates, or data removal requests. Do not delete records as part of the standard workflow. The `imported` status signals completion and the record serves as a remote audit trail until it expires.
+
 ## Form definitions
 
 The `form_definition` object controls what the client sees. It contains a title, optional description, and an array of sections.
@@ -243,6 +245,33 @@ draft  -->  sent  -->  submitted  -->  imported
 | `imported` | Agent has retrieved and processed the submission |
 
 The status transitions from `draft` to `sent` automatically when the client first views the form.
+
+## Local audit trail
+
+Remote records expire after 30 days. Agents that integrate with this API should keep a local audit trail so there is a permanent record of every interaction, independent of the remote lifecycle.
+
+The recommended structure is:
+
+```
+outputs/[project-name]/
+  intake/
+    [token]/
+      audit.jsonl           # Append-only log of every API call
+      definition.json       # Copy of the form definition sent to the API
+      response.json         # Copy of the submitted response retrieved from the API
+      files/                # Downloaded uploads
+```
+
+Each line in `audit.jsonl` is a single JSON object:
+
+```json
+{"ts":"2026-02-25T10:37:41Z","action":"create","method":"POST","path":"/api/intake","status":"draft"}
+{"ts":"2026-02-25T10:38:02Z","action":"status_check","method":"GET","path":"/api/intake/:token","status":"sent"}
+{"ts":"2026-02-26T14:22:11Z","action":"retrieve_response","method":"GET","path":"/api/intake/:token/response","status":"submitted"}
+{"ts":"2026-02-26T14:22:15Z","action":"mark_imported","method":"PATCH","path":"/api/intake/:token/status","status":"imported"}
+```
+
+After form creation, save a copy of `definition.json`. After retrieving a submission, save a copy of `response.json`. After downloading files, save them to `files/`. The local copies persist indefinitely and remain available after the remote record expires or is deleted.
 
 ## Database schema
 
