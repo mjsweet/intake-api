@@ -1,0 +1,17 @@
+name = "intake-api"
+main = "src/index.ts"
+compatibility_date = "2024-12-30"
+compatibility_flags = ["nodejs_compat"]
+# Set CLOUDFLARE_ACCOUNT_ID env var or uncomment and fill in:
+# account_id = ""
+routes = [
+  { pattern = "intake.platform21.com.au/*", zone_name = "platform21.com.au" },
+  { pattern = "intake.ecomow.com.au/*", zone_name = "ecomow.com.au" }
+]
+
+[vars]
+ENVIRONMENT = "production"
+
+[[r2_buckets]]
+binding = "INTAKE_BUCKET"
+bucket_name = "intake-uploads"
