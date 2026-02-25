@@ -66,6 +66,7 @@ Retrieve response for token [token]
 | POST | `/api/intake/:token/upload` | Upload a file |
 | GET | `/api/intake/:token/files` | List uploaded files |
 | GET | `/api/intake/:token/files/:fileId` | Download a file |
+| DELETE | `/api/intake/:token` | Delete record, files, and R2 objects |
 
 **Client-facing pages:**
 
@@ -238,6 +239,17 @@ curl -X PATCH https://intake.example.com/api/intake/[token]/status \
   -H "Authorization: Bearer $INTAKE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"status": "imported"}'
+```
+
+---
+
+## Deleting a Record
+
+To permanently delete an intake record and all associated data (files, form definition, response):
+
+```bash
+curl -X DELETE -H "Authorization: Bearer $INTAKE_API_KEY" \
+  https://intake.example.com/api/intake/[token]
 ```
 
 ---

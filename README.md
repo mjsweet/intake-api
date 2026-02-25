@@ -153,6 +153,14 @@ GET /api/intake/:token/files/:fileId
 
 Returns the file with appropriate `Content-Type` and `Content-Disposition` headers.
 
+### Delete an intake record
+
+```
+DELETE /api/intake/:token
+```
+
+Deletes the intake record, all associated files (from R2 and the database), the form definition, and the submitted response. Returns the count of deleted files.
+
 ## Form definitions
 
 The `form_definition` object controls what the client sees. It contains a title, optional description, and an array of sections.

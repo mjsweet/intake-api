@@ -4,7 +4,7 @@ import { drizzle } from "drizzle-orm/neon-http";
 import { eq } from "drizzle-orm";
 import { intakeRecords, intakeFiles } from "../schema";
 import { generateToken } from "../lib/tokens";
-import { uploadToR2, downloadFromR2, buildR2Key } from "../lib/storage";
+import { uploadToR2, downloadFromR2, deleteFromR2, buildR2Key } from "../lib/storage";
 import { authMiddleware } from "../middleware/auth";
 import type { Env } from "../index";
 
@@ -341,6 +341,45 @@ api.get("/intake/:token/files/:fileId", async (c) => {
       "Content-Length": file.sizeBytes.toString(),
     },
   });
+});
+
+// DELETE /api/intake/:token - Delete intake record, files, and R2 objects
+api.delete("/intake/:token", async (c) => {
+  const db = getDb(c);
+  const token = c.req.param("token");
+
+  const [record] = await db
+    .select()
+    .from(intakeRecords)
+    .where(eq(intakeRecords.token, token))
+    .limit(1);
+
+  if (!record) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  // Delete uploaded files from R2 and database
+  const files = await db
+    .select()
+    .from(intakeFiles)
+    .where(eq(intakeFiles.intakeId, record.id));
+
+  for (const file of files) {
+    await deleteFromR2(c.env.INTAKE_BUCKET, file.r2Key);
+  }
+
+  if (files.length > 0) {
+    await db.delete(intakeFiles).where(eq(intakeFiles.intakeId, record.id));
+  }
+
+  // Delete form definition and response from R2
+  await deleteFromR2(c.env.INTAKE_BUCKET, `forms/${token}/definition.json`);
+  await deleteFromR2(c.env.INTAKE_BUCKET, `forms/${token}/response.json`);
+
+  // Delete the record
+  await db.delete(intakeRecords).where(eq(intakeRecords.token, token));
+
+  return c.json({ success: true, deleted: { record: 1, files: files.length } });
 });
 
 export default api;
