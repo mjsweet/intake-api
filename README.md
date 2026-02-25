@@ -360,11 +360,30 @@ npm run db:studio
 
 ## Deployment
 
-Set the `CLOUDFLARE_ACCOUNT_ID` environment variable, then deploy:
+The checked-in `wrangler.toml` has no routes — it's safe for a public repository. Create a `wrangler.production.toml` with your real domain routes:
+
+```toml
+name = "intake-api"
+main = "src/index.ts"
+compatibility_date = "2024-12-30"
+compatibility_flags = ["nodejs_compat"]
+routes = [
+  { pattern = "intake.example.com/*", zone_name = "example.com" }
+]
+
+[vars]
+ENVIRONMENT = "production"
+
+[[r2_buckets]]
+binding = "INTAKE_BUCKET"
+bucket_name = "intake-uploads"
+```
+
+This file is gitignored. Deploy with:
 
 ```bash
 export CLOUDFLARE_ACCOUNT_ID=your-account-id
-npm run deploy
+npx wrangler deploy --config wrangler.production.toml
 ```
 
 Set the secrets in Cloudflare:
@@ -373,8 +392,6 @@ Set the secrets in Cloudflare:
 npx wrangler secret put DATABASE_URL
 npx wrangler secret put INTAKE_API_KEY
 ```
-
-The `wrangler.toml` file defines the route patterns. Update these to match your domain configuration.
 
 ## How this differs from other human-in-the-loop tools
 
