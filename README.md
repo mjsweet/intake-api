@@ -1,8 +1,12 @@
 # Intake API
 
-A Cloudflare Worker that serves dynamic client intake forms and a RESTful API for managing form submissions. Agents create forms programmatically through the API. Clients complete them through a branded web interface.
+An inbox for AI coding agents.
 
-Built with Hono, NEON Postgres (via Drizzle ORM), and Cloudflare R2 for file storage.
+AI agents can read files, write code, and call APIs. But when they need input from someone outside the terminal — a client, a stakeholder, a subject matter expert — the human operator becomes a manual relay. This project removes that bottleneck.
+
+The Intake API is a feedback machine. An agent creates a structured form, pre-fills it with what it already knows, and sends a token URL to the right person. That person opens the link, verifies the pre-filled data, fills in the gaps, and submits. The agent retrieves the structured response via API and continues working. No accounts, no apps, no copy-pasting between email and terminal.
+
+One Cloudflare Worker serves both the JSON API (agent-facing) and the branded web forms (human-facing). Built with Hono, NEON Postgres (via Drizzle ORM), and Cloudflare R2 for file storage.
 
 For the design rationale behind this approach, read [Giving AI Coding Agents an Inbox](https://www.userhat.com/giving-ai-coding-agents-an-inbox/).
 
