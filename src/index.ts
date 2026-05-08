@@ -7,6 +7,9 @@ export interface Env {
   DATABASE_URL: string;
   INTAKE_BUCKET: R2Bucket;
   INTAKE_API_KEY: string;
+  R2_ACCESS_KEY_ID: string;
+  R2_SECRET_ACCESS_KEY: string;
+  CF_ACCOUNT_ID: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();

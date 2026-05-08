@@ -4,7 +4,16 @@ import { drizzle } from "drizzle-orm/neon-http";
 import { eq } from "drizzle-orm";
 import { intakeRecords, intakeFiles } from "../schema";
 import { generateToken } from "../lib/tokens";
-import { uploadToR2, downloadFromR2, deleteFromR2, buildR2Key } from "../lib/storage";
+import {
+  uploadToR2,
+  downloadFromR2,
+  deleteFromR2,
+  buildR2Key,
+  generatePresignedUploadUrl,
+  isAllowedMimeType,
+  MAX_PRESIGN_SIZE,
+  PRESIGN_EXPIRES,
+} from "../lib/storage";
 import { authMiddleware } from "../middleware/auth";
 import type { Env } from "../index";
 
@@ -270,7 +279,7 @@ api.post("/intake/:token/upload", async (c) => {
       mimeType: file.type,
       sizeBytes: file.size,
       r2Key,
-      category: category as "logo" | "photo" | "document" | "other",
+      category: category as "logo" | "photo" | "document" | "video" | "other",
     })
     .returning();
 
@@ -340,6 +349,120 @@ api.get("/intake/:token/files/:fileId", async (c) => {
       "Content-Disposition": `attachment; filename="${file.originalName}"`,
       "Content-Length": file.sizeBytes.toString(),
     },
+  });
+});
+
+// POST /api/intake/:token/upload/presign - Get presigned URL for direct R2 upload
+api.post("/intake/:token/upload/presign", async (c) => {
+  const db = getDb(c);
+  const token = c.req.param("token");
+
+  const [record] = await db
+    .select()
+    .from(intakeRecords)
+    .where(eq(intakeRecords.token, token))
+    .limit(1);
+
+  if (!record) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const body = await c.req.json<{
+    filename: string;
+    content_type: string;
+    size_bytes: number;
+    category?: string;
+  }>();
+
+  if (!body.filename || !body.content_type || !body.size_bytes) {
+    return c.json({ error: "filename, content_type, and size_bytes are required" }, 400);
+  }
+
+  if (body.size_bytes > MAX_PRESIGN_SIZE) {
+    return c.json({ error: "File exceeds 500 MB limit" }, 413);
+  }
+
+  if (!isAllowedMimeType(body.content_type)) {
+    return c.json({ error: "File type not allowed" }, 415);
+  }
+
+  const category = body.category || "other";
+  const timestamp = Date.now();
+  const safeName = body.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const filename = `${timestamp}-${safeName}`;
+  const r2Key = buildR2Key(token, filename, category);
+
+  const uploadUrl = await generatePresignedUploadUrl(
+    c.env.R2_ACCESS_KEY_ID,
+    c.env.R2_SECRET_ACCESS_KEY,
+    c.env.CF_ACCOUNT_ID,
+    "intake-uploads",
+    r2Key,
+    body.content_type
+  );
+
+  return c.json({
+    upload_url: uploadUrl,
+    r2_key: r2Key,
+    filename,
+    expires_in: PRESIGN_EXPIRES,
+  });
+});
+
+// POST /api/intake/:token/upload/confirm - Confirm presigned upload completed
+api.post("/intake/:token/upload/confirm", async (c) => {
+  const db = getDb(c);
+  const token = c.req.param("token");
+
+  const [record] = await db
+    .select()
+    .from(intakeRecords)
+    .where(eq(intakeRecords.token, token))
+    .limit(1);
+
+  if (!record) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const body = await c.req.json<{
+    r2_key: string;
+    filename: string;
+    original_name: string;
+    content_type: string;
+    size_bytes: number;
+    category?: string;
+  }>();
+
+  if (!body.r2_key || !body.filename || !body.original_name || !body.content_type || !body.size_bytes) {
+    return c.json({ error: "r2_key, filename, original_name, content_type, and size_bytes are required" }, 400);
+  }
+
+  // Verify object exists in R2
+  const head = await c.env.INTAKE_BUCKET.head(body.r2_key);
+  if (!head) {
+    return c.json({ error: "Object not found in storage — upload may not have completed" }, 404);
+  }
+
+  const category = (body.category || "other") as "logo" | "photo" | "document" | "video" | "other";
+
+  const [fileRecord] = await db
+    .insert(intakeFiles)
+    .values({
+      intakeId: record.id,
+      filename: body.filename,
+      originalName: body.original_name,
+      mimeType: body.content_type,
+      sizeBytes: body.size_bytes,
+      r2Key: body.r2_key,
+      category,
+    })
+    .returning();
+
+  return c.json({
+    id: fileRecord.id,
+    filename: fileRecord.originalName,
+    category: fileRecord.category,
+    size_bytes: fileRecord.sizeBytes,
   });
 });
 

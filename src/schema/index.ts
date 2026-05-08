@@ -27,6 +27,7 @@ export const fileCategoryEnum = pgEnum("file_category", [
   "logo",
   "photo",
   "document",
+  "video",
   "other",
 ]);
 
