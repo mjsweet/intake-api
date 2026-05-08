@@ -137,7 +137,58 @@ Content-Type: multipart/form-data
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `file` | file | Yes | The file to upload (max 10 MB) |
-| `category` | string | No | `logo`, `photo`, `document`, or `other`. Defaults to `other` |
+| `category` | string | No | `logo`, `photo`, `document`, `video`, or `other`. Defaults to `other` |
+
+For files larger than 10 MB (up to 500 MB), use presigned uploads instead. See [Presigned uploads](#presigned-uploads) below.
+
+### Presigned uploads
+
+For large files (up to 500 MB), clients upload directly to R2 via a presigned URL, bypassing the Worker's memory limit. This is a three-step process.
+
+**Step 1 — Request a presigned URL:**
+
+```
+POST /api/intake/:token/upload/presign
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `filename` | string | Yes | Original filename |
+| `content_type` | string | Yes | MIME type (e.g. `video/mp4`) |
+| `size_bytes` | number | Yes | File size in bytes (max 500 MB) |
+| `category` | string | No | `logo`, `photo`, `document`, `video`, or `other` |
+
+Returns an `upload_url` (presigned R2 URL), `r2_key`, `filename`, and `expires_in` (seconds).
+
+**Step 2 — Upload directly to R2:**
+
+```
+PUT <upload_url>
+Content-Type: video/mp4
+
+<file body>
+```
+
+The Worker is not involved in this step. The client sends the file directly to R2.
+
+**Step 3 — Confirm the upload:**
+
+```
+POST /api/intake/:token/upload/confirm
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `r2_key` | string | Yes | The `r2_key` from step 1 |
+| `filename` | string | Yes | The `filename` from step 1 |
+| `original_name` | string | Yes | Original filename |
+| `content_type` | string | Yes | MIME type |
+| `size_bytes` | number | Yes | File size in bytes |
+| `category` | string | No | File category |
+
+The confirm endpoint verifies the object exists in R2 via HEAD, then inserts the file record into the database. Returns the same response shape as the standard upload endpoint.
+
+The client-facing form automatically uses presigned uploads for files over 10 MB — no agent configuration required.
 
 ### List uploaded files
 
@@ -217,9 +268,54 @@ The `form_definition` object controls what the client sees. It contains a title,
 | `select` | Dropdown menu. Requires `options` array |
 | `checkbox` | Group of checkboxes. Requires `options` array |
 | `content` | Read-only rendered Markdown. Uses `value` as the content source |
-| `file` | File upload with drag-and-drop. Supports `accept` and `category` attributes |
+| `file` | File upload with drag-and-drop. Supports `accept` and `category` attributes. Files over 10 MB automatically use presigned uploads |
+| `image` | Inline image display with optional pin annotations. Uses `fileIds`, `captions`, and `annotatable` attributes |
 
 Pre-filled values use the `value` or `default` field. The client can edit all fields except `content` blocks.
+
+### Repeating sections
+
+Sections can be marked as repeatable, allowing clients to add or remove instances dynamically. This is useful for collecting multiple items of the same type — team members, services, video submissions, etc.
+
+Add `repeatable`, `repeatId`, `min`, and `max` to a section definition:
+
+```json
+{
+  "heading": "Team Member",
+  "repeatable": true,
+  "repeatId": "team_members",
+  "min": 1,
+  "max": 4,
+  "fields": [
+    { "name": "name", "label": "Full Name", "type": "text", "required": true },
+    { "name": "role", "label": "Role", "type": "text" },
+    { "name": "headshot", "label": "Headshot", "type": "file", "accept": "image/*", "category": "photo" }
+  ]
+}
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `repeatable` | boolean | `false` | Enables add/remove buttons |
+| `repeatId` | string | — | Key used in the submitted data (required when `repeatable` is `true`) |
+| `min` | number | `1` | Minimum number of instances |
+| `max` | number | unlimited | Maximum number of instances. `0` means unlimited |
+
+Each instance renders as a numbered card. The "Remove" button is hidden when at the minimum count, and the "Add another" button is hidden when at the maximum.
+
+Field names are automatically namespaced: `team_members[0].name`, `team_members[1].name`, etc. On submission, repeating sections are restructured into arrays:
+
+```json
+{
+  "business_name": "Acme Studios",
+  "team_members": [
+    { "name": "Sarah Chen", "role": "Director", "_uploaded_files": { "headshot": [...] } },
+    { "name": "James Wong", "role": "Cinematographer", "_uploaded_files": { "headshot": [...] } }
+  ]
+}
+```
+
+File uploads and presigned uploads work within repeating instances. Auto-save to local storage also works — if the client refreshes the page, all instances and their data are restored.
 
 ## Client-facing pages
 
@@ -304,7 +400,7 @@ Two tables in NEON Postgres, managed by Drizzle ORM.
 | `mime_type` | VARCHAR(127) | File MIME type |
 | `size_bytes` | INTEGER | File size |
 | `r2_key` | VARCHAR(512) | Storage path in R2 |
-| `category` | ENUM | `logo`, `photo`, `document`, or `other` |
+| `category` | ENUM | `logo`, `photo`, `document`, `video`, or `other` |
 | `created_at` | TIMESTAMP | Upload time |
 
 ## File storage
@@ -340,6 +436,7 @@ src/
   middleware/
     auth.ts             # Bearer token auth for API routes
     cors.ts             # CORS middleware
+    security.ts         # Security headers
 drizzle/                # Generated migration files
 wrangler.toml           # Cloudflare Worker configuration
 drizzle.config.ts       # Drizzle Kit configuration
@@ -428,7 +525,12 @@ Set the secrets in Cloudflare:
 ```bash
 npx wrangler secret put DATABASE_URL
 npx wrangler secret put INTAKE_API_KEY
+npx wrangler secret put R2_ACCESS_KEY_ID
+npx wrangler secret put R2_SECRET_ACCESS_KEY
+npx wrangler secret put CF_ACCOUNT_ID
 ```
+
+The R2 secrets are required for presigned uploads. Create an R2 API token in the Cloudflare dashboard (R2 > Manage R2 API Tokens) with Object Read & Write permission on the `intake-uploads` bucket.
 
 ## How this differs from other human-in-the-loop tools
 
@@ -450,6 +552,6 @@ The other key difference is **pre-filling**. The agent does its research first �
 - **Secrets**: The `.dev.vars` file contains database credentials and the API key, and must not be committed. It is listed in `.gitignore`.
 - **Tokens**: Access tokens use a 24-character alphanumeric string generated from `crypto.getRandomValues()`. The alphabet excludes ambiguous characters (0, O, 1, l, I).
 - **Password protection**: Form passwords are hashed with SHA-256 before storage. This is appropriate for low-sensitivity PINs shared via email, not for user account credentials.
-- **File uploads**: Limited to 10 MB per file. Filenames are sanitised to alphanumeric characters, dots, hyphens, and underscores.
+- **File uploads**: Standard uploads are limited to 10 MB per file. Presigned uploads support files up to 500 MB (uploaded directly to R2, bypassing the Worker). Filenames are sanitised to alphanumeric characters, dots, hyphens, and underscores.
 - **CORS**: Restricted to the production hostname and `localhost:8787` for development.
 - **Expiry**: Forms expire after 30 days. The API returns `410 Gone` for expired tokens.
