@@ -3,6 +3,11 @@ import { Layout } from "./layout";
 import { renderMarkdown } from "../lib/markdown";
 import type { Brand } from "../lib/brands";
 
+interface CropConfig {
+  aspectRatio?: "free" | "1:1" | "4:3" | "16:9" | "3:2";
+  round?: boolean;
+}
+
 interface FormField {
   id?: string;
   name?: string;
@@ -18,6 +23,7 @@ interface FormField {
   fileIds?: string[];
   captions?: string[];
   annotatable?: boolean;
+  crop?: CropConfig;
 }
 
 interface FormSection {
@@ -204,6 +210,9 @@ function renderField(field: FormField, token: string) {
           data-token={token}
           data-category={category}
           data-accept={accept}
+          data-crop={field.crop ? "true" : undefined}
+          data-crop-ratio={field.crop?.aspectRatio ?? undefined}
+          data-crop-round={field.crop?.round ? "true" : undefined}
         >
           <input
             type="file"
@@ -241,6 +250,9 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
     s.fields.some((f) => f.type === "image" && f.annotatable)
   );
   const hasRepeatableSections = definition.sections.some((s) => s.repeatable);
+  const hasCropFields = definition.sections.some((s) =>
+    s.fields.some((f) => f.type === "file" && f.crop)
+  );
 
   return (
     <Layout title={`${definition.title} - ${brand.name}`} brand={brand}>
@@ -252,6 +264,13 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
           <p class="text-gray-600">{definition.description}</p>
         )}
       </div>
+
+      {hasCropFields && (
+        <>
+          <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css" />
+          <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
+        </>
+      )}
 
       <form id="dynamic-form" data-token={token} novalidate>
         {definition.sections.map((section, sectionIdx) => {
@@ -487,11 +506,11 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
       zone.addEventListener('drop', function(e) {
         e.preventDefault();
         zone.classList.remove('border-blue-400', 'bg-blue-50');
-        handleFiles(e.dataTransfer.files, fieldId, category, fileList);
+        handleFiles(e.dataTransfer.files, fieldId, category, fileList, zone);
       });
 
       input.addEventListener('change', function() {
-        handleFiles(input.files, fieldId, category, fileList);
+        handleFiles(input.files, fieldId, category, fileList, zone);
         input.value = '';
       });
     });
@@ -499,10 +518,155 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
 
   initFileUploads(form);
 
+  // --- Image Crop ---
+  ${hasCropFields ? `
+  var cropRatioMap = { 'free': NaN, '1:1': 1, '4:3': 4/3, '3:2': 3/2, '16:9': 16/9 };
+  var cropRatioLabels = [
+    { key: 'free', label: 'Free' },
+    { key: '1:1', label: '1:1' },
+    { key: '4:3', label: '4:3' },
+    { key: '3:2', label: '3:2' },
+    { key: '16:9', label: '16:9' }
+  ];
+
+  // Build crop modal DOM
+  var cropOverlay = document.createElement('div');
+  cropOverlay.className = 'crop-overlay';
+  cropOverlay.style.display = 'none';
+  cropOverlay.innerHTML = '<div class="crop-modal">' +
+    '<div class="crop-modal-body"><img id="crop-image" /></div>' +
+    '<div class="crop-modal-footer">' +
+      '<div class="crop-ratios"></div>' +
+      '<div class="crop-actions">' +
+        '<button type="button" class="crop-cancel-btn px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>' +
+        '<button type="button" class="crop-confirm-btn px-4 py-2 text-sm text-white rounded-lg" style="background:${brand.primaryColour}">Crop &amp; Upload</button>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+  document.body.appendChild(cropOverlay);
+
+  var cropImage = document.getElementById('crop-image');
+  var cropRatiosEl = cropOverlay.querySelector('.crop-ratios');
+  var cropCancelBtn = cropOverlay.querySelector('.crop-cancel-btn');
+  var cropConfirmBtn = cropOverlay.querySelector('.crop-confirm-btn');
+  var cropModalBody = cropOverlay.querySelector('.crop-modal-body');
+  var activeCropper = null;
+  var cropResolve = null;
+
+  function cropFile(file, zone) {
+    return new Promise(function(resolve, reject) {
+      cropResolve = resolve;
+      var ratio = zone.dataset.cropRatio || 'free';
+      var isRound = zone.dataset.cropRound === 'true';
+
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        cropImage.src = e.target.result;
+
+        // Round preview
+        if (isRound) {
+          cropModalBody.classList.add('crop-round-preview');
+        } else {
+          cropModalBody.classList.remove('crop-round-preview');
+        }
+
+        // Ratio buttons
+        cropRatiosEl.innerHTML = '';
+        cropRatioLabels.forEach(function(r) {
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'crop-ratio-btn' + (r.key === ratio ? ' active' : '');
+          btn.textContent = r.label;
+          btn.addEventListener('click', function() {
+            cropRatiosEl.querySelectorAll('.crop-ratio-btn').forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            if (activeCropper) {
+              activeCropper.setAspectRatio(cropRatioMap[r.key]);
+            }
+          });
+          cropRatiosEl.appendChild(btn);
+        });
+
+        // Show modal
+        cropOverlay.style.display = '';
+        document.body.style.overflow = 'hidden';
+
+        // Init Cropper.js after image loads
+        cropImage.onload = function() {
+          if (activeCropper) activeCropper.destroy();
+          activeCropper = new Cropper(cropImage, {
+            aspectRatio: cropRatioMap[ratio],
+            viewMode: 1,
+            responsive: true,
+            background: false,
+            autoCropArea: 0.9
+          });
+          cropImage.onload = null;
+        };
+      };
+      reader.readAsDataURL(file);
+
+      // Cancel handler
+      cropCancelBtn.onclick = function() {
+        closeCropModal();
+        reject('cancelled');
+      };
+
+      // Confirm handler
+      cropConfirmBtn.onclick = function() {
+        if (!activeCropper) return;
+        var canvas = activeCropper.getCroppedCanvas({ maxWidth: 2048, maxHeight: 2048 });
+
+        if (isRound) {
+          // Circular mask with transparency
+          var size = Math.min(canvas.width, canvas.height);
+          var roundCanvas = document.createElement('canvas');
+          roundCanvas.width = size;
+          roundCanvas.height = size;
+          var ctx = roundCanvas.getContext('2d');
+          ctx.beginPath();
+          ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+          ctx.closePath();
+          ctx.clip();
+          ctx.drawImage(canvas, 0, 0, size, size);
+          canvas = roundCanvas;
+        }
+
+        var mimeType = isRound ? 'image/png' : 'image/jpeg';
+        var ext = isRound ? '.png' : '.jpg';
+        var quality = isRound ? undefined : 0.92;
+
+        canvas.toBlob(function(blob) {
+          var cropped = new File([blob], 'cropped-' + Date.now() + ext, { type: mimeType });
+          closeCropModal();
+          resolve(cropped);
+        }, mimeType, quality);
+      };
+    });
+  }
+
+  function closeCropModal() {
+    if (activeCropper) {
+      activeCropper.destroy();
+      activeCropper = null;
+    }
+    cropOverlay.style.display = 'none';
+    document.body.style.overflow = '';
+  }
+
+  // Close on overlay click (outside modal)
+  cropOverlay.addEventListener('click', function(e) {
+    if (e.target === cropOverlay) {
+      closeCropModal();
+      if (cropResolve) cropResolve(null);
+    }
+  });
+  ` : ''}
+
   var MAX_STANDARD = 10 * 1024 * 1024; // 10 MB
   var MAX_PRESIGNED = 500 * 1024 * 1024; // 500 MB
 
-  async function handleFiles(files, fieldId, category, fileList) {
+  async function handleFiles(files, fieldId, category, fileList, zone) {
     for (var i = 0; i < files.length; i++) {
       var file = files[i];
       if (file.size > MAX_PRESIGNED) {
@@ -510,17 +674,28 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
         continue;
       }
 
+      // Crop step: if zone has crop config and file is an image
+      var fileToUpload = file;
+      if (zone && zone.dataset.crop === 'true' && file.type.startsWith('image/')) {
+        try {
+          fileToUpload = await cropFile(file, zone);
+        } catch(e) {
+          continue; // User cancelled
+        }
+        if (!fileToUpload) continue;
+      }
+
       // Show uploading state
       var tempId = 'uploading-' + Date.now() + '-' + i;
-      uploadedFiles[fieldId].push({ id: tempId, name: file.name, uploading: true });
+      uploadedFiles[fieldId].push({ id: tempId, name: fileToUpload.name || file.name, uploading: true });
       renderFileList(fileList, uploadedFiles[fieldId]);
 
       try {
         var result;
-        if (file.size > MAX_STANDARD) {
-          result = await uploadPresigned(file, category);
+        if (fileToUpload.size > MAX_STANDARD) {
+          result = await uploadPresigned(fileToUpload, category);
         } else {
-          result = await uploadStandard(file, category);
+          result = await uploadStandard(fileToUpload, category);
         }
 
         // Replace temp entry with real one

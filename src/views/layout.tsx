@@ -54,6 +54,16 @@ export const Layout: FC<PropsWithChildren<LayoutProps>> = ({
           display: flex; align-items: center; justify-content: center;
           margin-top: 6px;
         }
+        .crop-overlay { position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; padding: 16px; }
+        .crop-modal { background: white; border-radius: 12px; max-width: 600px; width: 100%; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column; }
+        .crop-modal-body { flex: 1; overflow: hidden; padding: 16px; min-height: 0; }
+        .crop-modal-body img { max-width: 100%; display: block; }
+        .crop-modal-footer { padding: 12px 16px; border-top: 1px solid #e5e7eb; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+        .crop-ratios { display: flex; gap: 4px; flex-wrap: wrap; }
+        .crop-ratio-btn { padding: 4px 10px; border-radius: 6px; font-size: 13px; border: 1px solid #d1d5db; background: white; cursor: pointer; }
+        .crop-ratio-btn.active { background: #1e3a5f; color: white; border-color: #1e3a5f; }
+        .crop-actions { display: flex; gap: 8px; }
+        .crop-round-preview .cropper-view-box, .crop-round-preview .cropper-face { border-radius: 50%; }
       `,
         }}
       />
