@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { intakeRecords } from "../schema";
 import {
   downloadFromR2,
+  uploadToR2,
   buildR2Key,
   generatePresignedUploadUrl,
   isAllowedMimeType,
@@ -147,6 +148,126 @@ form.post("/:token/verify", async (c) => {
   return renderDynamicForm(c, token);
 });
 
+// POST /:token/submit - Submit form response (client-facing, no auth required)
+form.post("/:token/submit", async (c) => {
+  const db = getDb(c);
+  const token = c.req.param("token");
+
+  const [record] = await db
+    .select()
+    .from(intakeRecords)
+    .where(eq(intakeRecords.token, token))
+    .limit(1);
+
+  if (!record) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  if (record.expiresAt < new Date()) {
+    return c.json({ error: "Intake form has expired" }, 410);
+  }
+
+  if (record.status === "submitted" || record.status === "imported") {
+    return c.json({ error: "Form already submitted" }, 409);
+  }
+
+  const body = await c.req.json<{
+    submitted_data: Record<string, unknown>;
+    partial?: boolean;
+  }>();
+
+  // Store response in R2
+  const responseKey = `forms/${token}/response.json`;
+  const responseBytes = new TextEncoder().encode(
+    JSON.stringify(body.submitted_data)
+  );
+  await uploadToR2(
+    c.env.INTAKE_BUCKET,
+    responseKey,
+    responseBytes.buffer,
+    "application/json"
+  );
+
+  const updateData: Record<string, unknown> = {
+    updatedAt: new Date(),
+  };
+
+  if (!body.partial) {
+    updateData.status = "submitted";
+    updateData.submittedAt = new Date();
+  }
+
+  await db
+    .update(intakeRecords)
+    .set(updateData)
+    .where(eq(intakeRecords.token, token));
+
+  return c.json({ success: true, status: body.partial ? record.status : "submitted" });
+});
+
+// POST /:token/upload - Upload file (client-facing, no auth required)
+form.post("/:token/upload", async (c) => {
+  const db = getDb(c);
+  const token = c.req.param("token");
+
+  const [record] = await db
+    .select()
+    .from(intakeRecords)
+    .where(eq(intakeRecords.token, token))
+    .limit(1);
+
+  if (!record) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  if (record.expiresAt < new Date()) {
+    return c.json({ error: "Intake form has expired" }, 410);
+  }
+
+  if (record.status === "submitted" || record.status === "imported") {
+    return c.json({ error: "Form already submitted" }, 409);
+  }
+
+  const formData = await c.req.formData();
+  const file = formData.get("file") as File | null;
+  const category = (formData.get("category") as string) || "other";
+
+  if (!file) {
+    return c.json({ error: "No file provided" }, 400);
+  }
+
+  if (file.size > 10 * 1024 * 1024) {
+    return c.json({ error: "File exceeds 10 MB limit" }, 413);
+  }
+
+  const timestamp = Date.now();
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const filename = `${timestamp}-${safeName}`;
+  const r2Key = buildR2Key(token, filename, category);
+
+  await uploadToR2(c.env.INTAKE_BUCKET, r2Key, await file.arrayBuffer(), file.type);
+
+  const [fileRecord] = await db
+    .insert(intakeFiles)
+    .values({
+      intakeId: record.id,
+      filename,
+      originalName: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      r2Key,
+      category: category as "logo" | "photo" | "document" | "video" | "other",
+    })
+    .returning();
+
+  return c.json({
+    id: fileRecord.id,
+    filename: fileRecord.originalName,
+    category: fileRecord.category,
+    size_bytes: fileRecord.sizeBytes,
+  });
+});
+
 // POST /:token/upload/presign - Get presigned URL for direct R2 upload (client-facing)
 form.post("/:token/upload/presign", async (c) => {
   const db = getDb(c);
@@ -274,6 +395,47 @@ form.post("/:token/upload/confirm", async (c) => {
     filename: fileRecord.originalName,
     category: fileRecord.category,
     size_bytes: fileRecord.sizeBytes,
+  });
+});
+
+// GET /:token/files/:fileId - Download file (client-facing, no auth required)
+form.get("/:token/files/:fileId", async (c) => {
+  const db = getDb(c);
+  const token = c.req.param("token");
+  const fileId = c.req.param("fileId");
+
+  const [record] = await db
+    .select()
+    .from(intakeRecords)
+    .where(eq(intakeRecords.token, token))
+    .limit(1);
+
+  if (!record) {
+    return c.text("Not found", 404);
+  }
+
+  const [file] = await db
+    .select()
+    .from(intakeFiles)
+    .where(eq(intakeFiles.id, fileId))
+    .limit(1);
+
+  if (!file || file.intakeId !== record.id) {
+    return c.text("File not found", 404);
+  }
+
+  const object = await downloadFromR2(c.env.INTAKE_BUCKET, file.r2Key);
+  if (!object) {
+    return c.text("File not found in storage", 404);
+  }
+
+  return new Response(object.body, {
+    headers: {
+      "Content-Type": file.mimeType,
+      "Content-Disposition": `inline; filename="${file.originalName}"`,
+      "Content-Length": file.sizeBytes.toString(),
+      "Cache-Control": "private, max-age=3600",
+    },
   });
 });
 

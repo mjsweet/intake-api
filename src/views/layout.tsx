@@ -37,6 +37,23 @@ export const Layout: FC<PropsWithChildren<LayoutProps>> = ({
         .progress-empty { background-color: #e5e7eb; }
         .drag-over { border-color: #3b82f6; background-color: #eff6ff; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .annotation-layer { position: absolute; inset: 0; cursor: crosshair; user-select: none; -webkit-user-select: none; }
+        .annotation-pin {
+          position: absolute; width: 24px; height: 24px; border-radius: 50%;
+          color: white; font-size: 12px; font-weight: 700;
+          display: flex; align-items: center; justify-content: center;
+          transform: translate(-50%, -50%); cursor: pointer;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.3); z-index: 10;
+          transition: transform 0.1s ease;
+        }
+        .annotation-pin:hover { transform: translate(-50%, -50%) scale(1.15); }
+        .annotation-note { display: flex; align-items: start; gap: 8px; }
+        .annotation-note-pin {
+          flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%;
+          color: white; font-size: 10px; font-weight: 700;
+          display: flex; align-items: center; justify-content: center;
+          margin-top: 6px;
+        }
       `,
         }}
       />

@@ -7,7 +7,7 @@ interface FormField {
   id?: string;
   name?: string;
   label: string;
-  type: "text" | "textarea" | "select" | "checkbox" | "content" | "file";
+  type: "text" | "textarea" | "select" | "checkbox" | "content" | "file" | "image";
   value?: string;
   default?: string;
   placeholder?: string;
@@ -15,6 +15,9 @@ interface FormField {
   options?: string[];
   accept?: string;
   category?: string;
+  fileIds?: string[];
+  captions?: string[];
+  annotatable?: boolean;
 }
 
 interface FormSection {
@@ -119,6 +122,39 @@ function renderField(field: FormField, token: string) {
         />
       );
 
+    case "image": {
+      const ids = field.fileIds ?? [];
+      const caps = field.captions ?? [];
+      return (
+        <div class="space-y-4" data-image-field={name} data-annotatable={field.annotatable ? "true" : "false"}>
+          {ids.map((fileId, idx) => (
+            <div class="image-block" data-file-id={fileId} data-field-name={name}>
+              <div class="relative inline-block w-full">
+                <img
+                  src={`/${token}/files/${fileId}`}
+                  alt={caps[idx] || field.label}
+                  loading="lazy"
+                  class="w-full rounded-lg border border-gray-200"
+                />
+                {field.annotatable && (
+                  <div class="annotation-layer" data-annotation-layer={`${name}__${fileId}`}></div>
+                )}
+              </div>
+              {caps[idx] && (
+                <p class="text-xs text-gray-500 mt-1">{caps[idx]}</p>
+              )}
+              {field.annotatable && (
+                <div class="annotation-notes mt-2 space-y-2" data-annotation-notes={`${name}__${fileId}`}></div>
+              )}
+            </div>
+          ))}
+          {field.annotatable && ids.length > 0 && (
+            <p class="text-xs text-gray-400">Click on the image to add annotation pins</p>
+          )}
+        </div>
+      );
+    }
+
     case "file": {
       const category = field.category ?? "photo";
       const accept = field.accept ?? "image/*";
@@ -162,6 +198,9 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
   const hasFileFields = definition.sections.some((s) =>
     s.fields.some((f) => f.type === "file")
   );
+  const hasImageFields = definition.sections.some((s) =>
+    s.fields.some((f) => f.type === "image" && f.annotatable)
+  );
 
   return (
     <Layout title={`${definition.title} - ${brand.name}`} brand={brand}>
@@ -189,7 +228,7 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
             <div class="space-y-5">
               {section.fields.map((field) => (
                 <div>
-                  {field.type !== "content" && field.type !== "file" && (
+                  {field.type !== "content" && field.type !== "file" && field.type !== "image" && (
                     <label class="block text-sm font-medium text-gray-700 mb-1">
                       {field.label}
                       {field.required && (
@@ -208,6 +247,11 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
                       {field.required && (
                         <span class="text-red-500 ml-0.5">*</span>
                       )}
+                    </label>
+                  )}
+                  {field.type === "image" && (
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                      {field.label}
                     </label>
                   )}
                   {renderField(field, token)}
@@ -354,7 +398,7 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
         fd.append('file', file);
         fd.append('category', category);
 
-        var res = await fetch('/api/intake/' + token + '/upload', {
+        var res = await fetch('/' + token + '/upload', {
           method: 'POST',
           body: fd
         });
@@ -427,6 +471,167 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
   });
   ` : ''}
 
+  // --- Image Annotations ---
+  ${hasImageFields ? `
+  var pinColour = '${brand.primaryColour}';
+  var imageAnnotations = {};
+
+  // Restore annotations from localStorage
+  var savedAnnotations = localStorage.getItem(storageKey);
+  if (savedAnnotations) {
+    try {
+      var parsed = JSON.parse(savedAnnotations);
+      if (parsed._image_annotations) {
+        imageAnnotations = parsed._image_annotations;
+        // Re-render saved pins
+        Object.keys(imageAnnotations).forEach(function(fieldName) {
+          var fieldData = imageAnnotations[fieldName];
+          if (!Array.isArray(fieldData)) return;
+          fieldData.forEach(function(imgData) {
+            var layerKey = fieldName + '__' + imgData.fileId;
+            var layer = document.querySelector('[data-annotation-layer="' + layerKey + '"]');
+            var notes = document.querySelector('[data-annotation-notes="' + layerKey + '"]');
+            if (!layer || !notes) return;
+            (imgData.pins || []).forEach(function(pin) {
+              addPinToDOM(layer, notes, layerKey, pin.x, pin.y, pin.pin, pin.note);
+            });
+          });
+        });
+      }
+    } catch(e) {}
+  }
+
+  // Click handler for annotation layers
+  document.querySelectorAll('.annotation-layer').forEach(function(layer) {
+    layer.addEventListener('click', function(e) {
+      var rect = layer.getBoundingClientRect();
+      var xPct = ((e.clientX - rect.left) / rect.width) * 100;
+      var yPct = ((e.clientY - rect.top) / rect.height) * 100;
+      var layerKey = layer.dataset.annotationLayer;
+      var notes = document.querySelector('[data-annotation-notes="' + layerKey + '"]');
+      var existingPins = layer.querySelectorAll('.annotation-pin');
+      var pinNum = existingPins.length + 1;
+
+      addPinToDOM(layer, notes, layerKey, xPct, yPct, pinNum, '');
+      saveAnnotationsToStorage();
+    });
+  });
+
+  function addPinToDOM(layer, notesContainer, layerKey, xPct, yPct, pinNum, noteText) {
+    // Create pin on image
+    var pin = document.createElement('div');
+    pin.className = 'annotation-pin';
+    pin.style.left = xPct + '%';
+    pin.style.top = yPct + '%';
+    pin.style.backgroundColor = pinColour;
+    pin.textContent = pinNum;
+    pin.dataset.pinNum = pinNum;
+    layer.appendChild(pin);
+
+    // Create note row
+    var noteRow = document.createElement('div');
+    noteRow.className = 'annotation-note';
+    noteRow.dataset.pinNum = pinNum;
+
+    var badge = document.createElement('div');
+    badge.className = 'annotation-note-pin';
+    badge.style.backgroundColor = pinColour;
+    badge.textContent = pinNum;
+
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Add a note for pin ' + pinNum + '...';
+    input.value = noteText || '';
+    input.className = 'flex-1 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+    input.addEventListener('input', function() {
+      saveAnnotationsToStorage();
+    });
+
+    var removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'text-red-400 hover:text-red-600 text-xs px-1';
+    removeBtn.textContent = 'Remove';
+    removeBtn.addEventListener('click', function() {
+      pin.remove();
+      noteRow.remove();
+      renumberPins(layer, notesContainer, layerKey);
+      saveAnnotationsToStorage();
+    });
+
+    noteRow.appendChild(badge);
+    noteRow.appendChild(input);
+    noteRow.appendChild(removeBtn);
+    notesContainer.appendChild(noteRow);
+  }
+
+  function renumberPins(layer, notesContainer, layerKey) {
+    var pins = layer.querySelectorAll('.annotation-pin');
+    var noteRows = notesContainer.querySelectorAll('.annotation-note');
+    pins.forEach(function(p, i) {
+      p.textContent = i + 1;
+      p.dataset.pinNum = i + 1;
+    });
+    noteRows.forEach(function(row, i) {
+      row.dataset.pinNum = i + 1;
+      var badge = row.querySelector('.annotation-note-pin');
+      if (badge) badge.textContent = i + 1;
+    });
+  }
+
+  function saveAnnotationsToStorage() {
+    var fields = document.querySelectorAll('[data-image-field]');
+    fields.forEach(function(fieldEl) {
+      var fieldName = fieldEl.dataset.imageField;
+      if (fieldEl.dataset.annotatable !== 'true') return;
+
+      var blocks = fieldEl.querySelectorAll('.image-block');
+      var fieldAnnotations = [];
+
+      blocks.forEach(function(block) {
+        var fileId = block.dataset.fileId;
+        var layerKey = fieldName + '__' + fileId;
+        var layer = document.querySelector('[data-annotation-layer="' + layerKey + '"]');
+        var notesContainer = document.querySelector('[data-annotation-notes="' + layerKey + '"]');
+        if (!layer) return;
+
+        var pins = layer.querySelectorAll('.annotation-pin');
+        var noteRows = notesContainer ? notesContainer.querySelectorAll('.annotation-note') : [];
+        var pinData = [];
+
+        pins.forEach(function(p, i) {
+          var noteInput = noteRows[i] ? noteRows[i].querySelector('input') : null;
+          pinData.push({
+            pin: parseInt(p.dataset.pinNum),
+            x: parseFloat(parseFloat(p.style.left).toFixed(1)),
+            y: parseFloat(parseFloat(p.style.top).toFixed(1)),
+            note: noteInput ? noteInput.value : ''
+          });
+        });
+
+        // Find caption from the block
+        var captionEl = block.querySelector('p');
+        var caption = captionEl ? captionEl.textContent : '';
+
+        fieldAnnotations.push({
+          fileId: fileId,
+          caption: caption,
+          pins: pinData
+        });
+      });
+
+      if (fieldAnnotations.length > 0) {
+        imageAnnotations[fieldName] = fieldAnnotations;
+      }
+    });
+
+    // Merge into localStorage
+    var existing = {};
+    try { existing = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch(e) {}
+    existing._image_annotations = imageAnnotations;
+    localStorage.setItem(storageKey, JSON.stringify(existing));
+  }
+  ` : ''}
+
   // Submit handler
   form.addEventListener('submit', async function(e) {
     e.preventDefault();
@@ -452,9 +657,14 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
       body._uploaded_files = uploadedFiles;
     }
 
+    // Include image annotations
+    if (typeof imageAnnotations !== 'undefined' && Object.keys(imageAnnotations).length > 0) {
+      body._image_annotations = imageAnnotations;
+    }
+
     try {
-      var res = await fetch('/api/intake/' + token, {
-        method: 'PUT',
+      var res = await fetch('/' + token + '/submit', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ submitted_data: body, partial: false })
       });
