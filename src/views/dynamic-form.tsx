@@ -179,7 +179,7 @@ function renderField(field: FormField, token: string) {
             </svg>
           </div>
           <p class="text-sm font-medium text-gray-700">Click to upload or drag files here</p>
-          <p class="text-xs text-gray-500 mt-1">Up to 10 MB per file</p>
+          <p class="text-xs text-gray-500 mt-1">Up to 500 MB per file</p>
           <div class="file-list mt-4 space-y-2" data-file-list={name}></div>
         </div>
       );
@@ -380,11 +380,14 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
     });
   });
 
+  var MAX_STANDARD = 10 * 1024 * 1024; // 10 MB
+  var MAX_PRESIGNED = 500 * 1024 * 1024; // 500 MB
+
   async function handleFiles(files, fieldId, category, fileList) {
     for (var i = 0; i < files.length; i++) {
       var file = files[i];
-      if (file.size > 10 * 1024 * 1024) {
-        alert(file.name + ' is too large (max 10 MB).');
+      if (file.size > MAX_PRESIGNED) {
+        alert(file.name + ' is too large (max 500 MB).');
         continue;
       }
 
@@ -394,18 +397,12 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
       renderFileList(fileList, uploadedFiles[fieldId]);
 
       try {
-        var fd = new FormData();
-        fd.append('file', file);
-        fd.append('category', category);
-
-        var res = await fetch('/' + token + '/upload', {
-          method: 'POST',
-          body: fd
-        });
-
-        if (!res.ok) throw new Error('Upload failed');
-
-        var result = await res.json();
+        var result;
+        if (file.size > MAX_STANDARD) {
+          result = await uploadPresigned(file, category);
+        } else {
+          result = await uploadStandard(file, category);
+        }
 
         // Replace temp entry with real one
         var idx = uploadedFiles[fieldId].findIndex(function(f) { return f.id === tempId; });
@@ -426,6 +423,59 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
       renderFileList(fileList, uploadedFiles[fieldId]);
       saveToStorage();
     }
+  }
+
+  async function uploadStandard(file, category) {
+    var fd = new FormData();
+    fd.append('file', file);
+    fd.append('category', category);
+
+    var res = await fetch('/' + token + '/upload', {
+      method: 'POST',
+      body: fd
+    });
+    if (!res.ok) throw new Error('Upload failed');
+    return await res.json();
+  }
+
+  async function uploadPresigned(file, category) {
+    // Step 1: Get presigned URL
+    var presignRes = await fetch('/' + token + '/upload/presign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: file.name,
+        content_type: file.type || 'application/octet-stream',
+        size_bytes: file.size,
+        category: category
+      })
+    });
+    if (!presignRes.ok) throw new Error('Presign failed');
+    var presignData = await presignRes.json();
+
+    // Step 2: Upload directly to R2
+    var uploadRes = await fetch(presignData.upload_url, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file
+    });
+    if (!uploadRes.ok) throw new Error('Direct upload failed');
+
+    // Step 3: Confirm
+    var confirmRes = await fetch('/' + token + '/upload/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        r2_key: presignData.r2_key,
+        filename: presignData.filename,
+        original_name: file.name,
+        content_type: file.type || 'application/octet-stream',
+        size_bytes: file.size,
+        category: category
+      })
+    });
+    if (!confirmRes.ok) throw new Error('Confirm failed');
+    return await confirmRes.json();
   }
 
   function renderFileList(container, files) {
