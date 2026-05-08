@@ -491,7 +491,7 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
       }
 
       zone.addEventListener('click', function(e) {
-        if (e.target.closest('.file-item')) return;
+        if (e.target === input || e.target.closest('.file-item')) return;
         input.click();
       });
 
