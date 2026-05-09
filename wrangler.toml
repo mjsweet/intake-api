@@ -12,6 +12,7 @@ compatibility_flags = ["nodejs_compat"]
 
 # Secrets (set via `wrangler secret put`):
 # - INTAKE_API_KEY: Bearer token for /api/* routes
+# - R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, CF_ACCOUNT_ID: For presigned uploads
 
 [vars]
 ENVIRONMENT = "production"
@@ -19,3 +20,8 @@ ENVIRONMENT = "production"
 [[r2_buckets]]
 binding = "INTAKE_BUCKET"
 bucket_name = "intake-uploads"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "intake-db"
+database_id = "cdb21f17-6877-4f28-8952-2b6ab0f7b553"

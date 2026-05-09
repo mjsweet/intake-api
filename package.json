@@ -13,7 +13,6 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^0.10.4",
     "aws4fetch": "^1.0.20",
     "drizzle-orm": "^0.38.3",
     "hono": "^4.6.14"

@@ -1,6 +1,5 @@
 import { Hono } from "hono";
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import { drizzle } from "drizzle-orm/d1";
 import { eq } from "drizzle-orm";
 import { intakeRecords, intakeFiles } from "../schema";
 import { generateToken } from "../lib/tokens";
@@ -23,8 +22,7 @@ const api = new Hono<{ Bindings: Env }>();
 api.use("*", authMiddleware);
 
 function getDb(c: { env: Env }) {
-  const sql = neon(c.env.DATABASE_URL);
-  return drizzle(sql);
+  return drizzle(c.env.DB);
 }
 
 // Hash a password with SHA-256 (suitable for form PINs, not user accounts)
@@ -52,8 +50,9 @@ api.post("/intake", async (c) => {
   }
 
   const token = generateToken();
-  const expiresAt = new Date();
-  expiresAt.setDate(expiresAt.getDate() + 30);
+  const expiry = new Date();
+  expiry.setDate(expiry.getDate() + 30);
+  const expiresAt = expiry.toISOString();
 
   const passwordHash = body.password
     ? await hashPassword(body.password)
@@ -107,7 +106,7 @@ api.get("/intake/:token", async (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  if (record.expiresAt < new Date()) {
+  if (record.expiresAt < new Date().toISOString()) {
     return c.json({ error: "Intake form has expired" }, 410);
   }
 
@@ -188,7 +187,7 @@ api.put("/intake/:token", async (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  if (record.expiresAt < new Date()) {
+  if (record.expiresAt < new Date().toISOString()) {
     return c.json({ error: "Intake form has expired" }, 410);
   }
 
@@ -206,12 +205,12 @@ api.put("/intake/:token", async (c) => {
 
   // Update NEON metadata
   const updateData: Record<string, unknown> = {
-    updatedAt: new Date(),
+    updatedAt: new Date().toISOString(),
   };
 
   if (!body.partial) {
     updateData.status = "submitted";
-    updateData.submittedAt = new Date();
+    updateData.submittedAt = new Date().toISOString();
   }
 
   await db
@@ -230,7 +229,7 @@ api.patch("/intake/:token/status", async (c) => {
 
   await db
     .update(intakeRecords)
-    .set({ status: status as "draft" | "sent" | "submitted" | "imported", updatedAt: new Date() })
+    .set({ status: status as "draft" | "sent" | "submitted" | "imported", updatedAt: new Date().toISOString() })
     .where(eq(intakeRecords.token, token));
 
   return c.json({ success: true });

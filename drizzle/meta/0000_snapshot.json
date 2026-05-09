@@ -1,70 +1,75 @@
 {
-  "id": "c445a7f9-2c85-411b-a185-655f428830e3",
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "d1dc20f6-28af-428e-a3b6-8d3470c8eb1e",
   "prevId": "00000000-0000-0000-0000-000000000000",
-  "version": "7",
-  "dialect": "postgresql",
   "tables": {
-    "public.intake_files": {
+    "intake_files": {
       "name": "intake_files",
-      "schema": "",
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
           "notNull": true,
-          "default": "gen_random_uuid()"
+          "autoincrement": false
         },
         "intake_id": {
           "name": "intake_id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "autoincrement": false
         },
         "filename": {
           "name": "filename",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "autoincrement": false
         },
         "original_name": {
           "name": "original_name",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "autoincrement": false
         },
         "mime_type": {
           "name": "mime_type",
-          "type": "varchar(127)",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "autoincrement": false
         },
         "size_bytes": {
           "name": "size_bytes",
           "type": "integer",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "autoincrement": false
         },
         "r2_key": {
           "name": "r2_key",
-          "type": "varchar(512)",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "autoincrement": false
         },
         "category": {
           "name": "category",
-          "type": "file_category",
-          "typeSchema": "public",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false,
           "default": "'other'"
         },
         "created_at": {
           "name": "created_at",
-          "type": "timestamp",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "now()"
+          "autoincrement": false
         }
       },
       "indexes": {},
@@ -85,165 +90,113 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
+      "checkConstraints": {}
     },
-    "public.intake_records": {
+    "intake_records": {
       "name": "intake_records",
-      "schema": "",
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
           "notNull": true,
-          "default": "gen_random_uuid()"
+          "autoincrement": false
         },
         "token": {
           "name": "token",
-          "type": "varchar(64)",
+          "type": "text(64)",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "autoincrement": false
         },
         "project_name": {
           "name": "project_name",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "autoincrement": false
         },
         "workflow": {
           "name": "workflow",
-          "type": "workflow",
-          "typeSchema": "public",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "autoincrement": false
         },
         "mode": {
           "name": "mode",
-          "type": "mode",
-          "typeSchema": "public",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "autoincrement": false
         },
         "status": {
           "name": "status",
-          "type": "status",
-          "typeSchema": "public",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false,
           "default": "'draft'"
-        },
-        "scraped_data": {
-          "name": "scraped_data",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "submitted_data": {
-          "name": "submitted_data",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",
-          "type": "timestamp",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "now()"
+          "autoincrement": false
         },
         "updated_at": {
           "name": "updated_at",
-          "type": "timestamp",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "now()"
+          "autoincrement": false
         },
         "submitted_at": {
           "name": "submitted_at",
-          "type": "timestamp",
+          "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "autoincrement": false
         },
         "expires_at": {
           "name": "expires_at",
-          "type": "timestamp",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "autoincrement": false
         },
         "password_hash": {
           "name": "password_hash",
-          "type": "varchar(128)",
+          "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "autoincrement": false
         }
       },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
+      "indexes": {
         "intake_records_token_unique": {
           "name": "intake_records_token_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "token"
-          ]
+          ],
+          "isUnique": true
         }
       },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
     }
   },
-  "enums": {
-    "public.file_category": {
-      "name": "file_category",
-      "schema": "public",
-      "values": [
-        "logo",
-        "photo",
-        "document",
-        "other"
-      ]
-    },
-    "public.mode": {
-      "name": "mode",
-      "schema": "public",
-      "values": [
-        "full",
-        "prd",
-        "autonomous",
-        "quickstart"
-      ]
-    },
-    "public.status": {
-      "name": "status",
-      "schema": "public",
-      "values": [
-        "draft",
-        "sent",
-        "submitted",
-        "imported"
-      ]
-    },
-    "public.workflow": {
-      "name": "workflow",
-      "schema": "public",
-      "values": [
-        "migrate",
-        "newsite"
-      ]
-    }
-  },
-  "schemas": {},
-  "sequences": {},
-  "roles": {},
-  "policies": {},
   "views": {},
+  "enums": {},
   "_meta": {
-    "columns": {},
     "schemas": {},
-    "tables": {}
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
   }
 }

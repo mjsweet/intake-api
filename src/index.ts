@@ -4,7 +4,7 @@ import apiRoutes from "./routes/api";
 import formRoutes from "./routes/form";
 
 export interface Env {
-  DATABASE_URL: string;
+  DB: D1Database;
   INTAKE_BUCKET: R2Bucket;
   INTAKE_API_KEY: string;
   R2_ACCESS_KEY_ID: string;

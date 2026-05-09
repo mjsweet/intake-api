@@ -1,6 +1,5 @@
 import { Hono } from "hono";
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import { drizzle } from "drizzle-orm/d1";
 import { eq } from "drizzle-orm";
 import { intakeRecords } from "../schema";
 import {
@@ -23,8 +22,7 @@ import type { Env } from "../index";
 const form = new Hono<{ Bindings: Env }>();
 
 function getDb(c: { env: Env }) {
-  const sql = neon(c.env.DATABASE_URL);
-  return drizzle(sql);
+  return drizzle(c.env.DB);
 }
 
 async function hashPassword(password: string): Promise<string> {
@@ -78,7 +76,7 @@ form.get("/:token", async (c) => {
     return c.text("This intake form was not found.", 404);
   }
 
-  if (record.expiresAt < new Date()) {
+  if (record.expiresAt < new Date().toISOString()) {
     return c.text("This intake form has expired. Please contact us for a new link.", 410);
   }
 
@@ -96,7 +94,7 @@ form.get("/:token", async (c) => {
   if (record.status === "draft") {
     await db
       .update(intakeRecords)
-      .set({ status: "sent", updatedAt: new Date() })
+      .set({ status: "sent", updatedAt: new Date().toISOString() })
       .where(eq(intakeRecords.token, token));
   }
 
@@ -118,7 +116,7 @@ form.post("/:token/verify", async (c) => {
     return c.text("This intake form was not found.", 404);
   }
 
-  if (record.expiresAt < new Date()) {
+  if (record.expiresAt < new Date().toISOString()) {
     return c.text("This intake form has expired. Please contact us for a new link.", 410);
   }
 
@@ -141,7 +139,7 @@ form.post("/:token/verify", async (c) => {
   if (record.status === "draft") {
     await db
       .update(intakeRecords)
-      .set({ status: "sent", updatedAt: new Date() })
+      .set({ status: "sent", updatedAt: new Date().toISOString() })
       .where(eq(intakeRecords.token, token));
   }
 
@@ -163,7 +161,7 @@ form.post("/:token/submit", async (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  if (record.expiresAt < new Date()) {
+  if (record.expiresAt < new Date().toISOString()) {
     return c.json({ error: "Intake form has expired" }, 410);
   }
 
@@ -189,12 +187,12 @@ form.post("/:token/submit", async (c) => {
   );
 
   const updateData: Record<string, unknown> = {
-    updatedAt: new Date(),
+    updatedAt: new Date().toISOString(),
   };
 
   if (!body.partial) {
     updateData.status = "submitted";
-    updateData.submittedAt = new Date();
+    updateData.submittedAt = new Date().toISOString();
   }
 
   await db
@@ -220,7 +218,7 @@ form.post("/:token/upload", async (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  if (record.expiresAt < new Date()) {
+  if (record.expiresAt < new Date().toISOString()) {
     return c.json({ error: "Intake form has expired" }, 410);
   }
 
@@ -283,7 +281,7 @@ form.post("/:token/upload/presign", async (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  if (record.expiresAt < new Date()) {
+  if (record.expiresAt < new Date().toISOString()) {
     return c.json({ error: "Intake form has expired" }, 410);
   }
 
@@ -348,7 +346,7 @@ form.post("/:token/upload/confirm", async (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  if (record.expiresAt < new Date()) {
+  if (record.expiresAt < new Date().toISOString()) {
     return c.json({ error: "Intake form has expired" }, 410);
   }
 

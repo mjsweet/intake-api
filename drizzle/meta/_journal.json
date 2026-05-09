@@ -1,26 +1,12 @@
 {
   "version": "7",
-  "dialect": "postgresql",
+  "dialect": "sqlite",
   "entries": [
     {
       "idx": 0,
-      "version": "7",
-      "when": 1771880528737,
-      "tag": "0000_vengeful_manta",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1741257600000,
-      "tag": "0001_add_password_rate_limiting",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1746662400000,
-      "tag": "0002_add_video_category",
+      "version": "6",
+      "when": 1778291454867,
+      "tag": "0000_gray_felicia_hardy",
       "breakpoints": true
     }
   ]

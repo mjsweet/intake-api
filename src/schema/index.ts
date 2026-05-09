@@ -1,62 +1,51 @@
-import {
-  pgTable,
-  uuid,
-  varchar,
-  pgEnum,
-  timestamp,
-  integer,
-} from "drizzle-orm/pg-core";
+import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 
-export const workflowEnum = pgEnum("workflow", ["migrate", "newsite"]);
-
-export const modeEnum = pgEnum("mode", [
-  "full",
-  "prd",
-  "autonomous",
-  "quickstart",
-]);
-
-export const statusEnum = pgEnum("status", [
-  "draft",
-  "sent",
-  "submitted",
-  "imported",
-]);
-
-export const fileCategoryEnum = pgEnum("file_category", [
-  "logo",
-  "photo",
-  "document",
-  "video",
-  "other",
-]);
-
-export const intakeRecords = pgTable("intake_records", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  token: varchar("token", { length: 64 }).unique().notNull(),
-  projectName: varchar("project_name", { length: 255 }).notNull(),
-  workflow: workflowEnum("workflow").notNull(),
-  mode: modeEnum("mode").notNull(),
-  status: statusEnum("status").default("draft").notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-  submittedAt: timestamp("submitted_at"),
-  expiresAt: timestamp("expires_at").notNull(),
-  passwordHash: varchar("password_hash", { length: 128 }),
+export const intakeRecords = sqliteTable("intake_records", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  token: text("token", { length: 64 }).unique().notNull(),
+  projectName: text("project_name").notNull(),
+  workflow: text("workflow", { enum: ["migrate", "newsite"] }).notNull(),
+  mode: text("mode", {
+    enum: ["full", "prd", "autonomous", "quickstart"],
+  }).notNull(),
+  status: text("status", {
+    enum: ["draft", "sent", "submitted", "imported"],
+  })
+    .default("draft")
+    .notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+  submittedAt: text("submitted_at"),
+  expiresAt: text("expires_at").notNull(),
+  passwordHash: text("password_hash"),
 });
 
-export const intakeFiles = pgTable("intake_files", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  intakeId: uuid("intake_id")
+export const intakeFiles = sqliteTable("intake_files", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  intakeId: text("intake_id")
     .references(() => intakeRecords.id)
     .notNull(),
-  filename: varchar("filename", { length: 255 }).notNull(),
-  originalName: varchar("original_name", { length: 255 }).notNull(),
-  mimeType: varchar("mime_type", { length: 127 }).notNull(),
+  filename: text("filename").notNull(),
+  originalName: text("original_name").notNull(),
+  mimeType: text("mime_type").notNull(),
   sizeBytes: integer("size_bytes").notNull(),
-  r2Key: varchar("r2_key", { length: 512 }).notNull(),
-  category: fileCategoryEnum("category").default("other").notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+  r2Key: text("r2_key").notNull(),
+  category: text("category", {
+    enum: ["logo", "photo", "document", "video", "other"],
+  })
+    .default("other")
+    .notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
 });
 
 export type IntakeRecord = typeof intakeRecords.$inferSelect;
