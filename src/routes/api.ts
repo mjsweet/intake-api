@@ -14,6 +14,7 @@ import {
   PRESIGN_EXPIRES,
 } from "../lib/storage";
 import { authMiddleware } from "../middleware/auth";
+import { sendSubmissionNotification } from "../lib/notify";
 import type { Env } from "../index";
 
 const api = new Hono<{ Bindings: Env }>();
@@ -217,6 +218,12 @@ api.put("/intake/:token", async (c) => {
     .update(intakeRecords)
     .set(updateData)
     .where(eq(intakeRecords.token, token));
+
+  if (!body.partial && record.status !== "submitted" && record.status !== "imported") {
+    c.executionCtx.waitUntil(
+      sendSubmissionNotification(c.env, c.req.header("host"), record, body.submitted_data)
+    );
+  }
 
   return c.json({ success: true, status: body.partial ? record.status : "submitted" });
 });

@@ -17,6 +17,7 @@ import type { FormDefinition } from "../views/dynamic-form";
 import { ThanksPage } from "../views/thanks";
 import { PasswordGatePage } from "../views/password-gate";
 import { getBrand } from "../lib/brands";
+import { sendSubmissionNotification } from "../lib/notify";
 import type { Env } from "../index";
 
 const form = new Hono<{ Bindings: Env }>();
@@ -199,6 +200,12 @@ form.post("/:token/submit", async (c) => {
     .update(intakeRecords)
     .set(updateData)
     .where(eq(intakeRecords.token, token));
+
+  if (!body.partial) {
+    c.executionCtx.waitUntil(
+      sendSubmissionNotification(c.env, c.req.header("host"), record, body.submitted_data)
+    );
+  }
 
   return c.json({ success: true, status: body.partial ? record.status : "submitted" });
 });

@@ -16,6 +16,14 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 ENVIRONMENT = "production"
+# NOTIFY_TO = "you@example.com"        # submission notification recipient
+# NOTIFY_FROM = "intake@example.com"   # must use an Email Sending enabled domain
+
+# Cloudflare Email Service binding for submission notifications (optional —
+# the worker no-ops when the binding is absent). Enable the sender domain once:
+#   npx wrangler email sending enable example.com
+# [[send_email]]
+# name = "NOTIFY"
 
 [[r2_buckets]]
 binding = "INTAKE_BUCKET"
