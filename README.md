@@ -6,7 +6,7 @@ AI agents can read files, write code, and call APIs. But when they need input fr
 
 The Intake API is a feedback machine. An agent creates a structured form, pre-fills it with what it already knows, and sends a token URL to the right person. That person opens the link, verifies the pre-filled data, fills in the gaps, and submits. The agent retrieves the structured response via API and continues working. No accounts, no apps, no copy-pasting between email and terminal.
 
-One Cloudflare Worker serves both the JSON API (agent-facing) and the branded web forms (human-facing). Built with Hono, NEON Postgres (via Drizzle ORM), and Cloudflare R2 for file storage.
+One Cloudflare Worker serves both the JSON API (agent-facing) and the branded web forms (human-facing). Built with Hono, Cloudflare D1 (SQLite, via Drizzle ORM), and Cloudflare R2 for file storage.
 
 For the design rationale behind this approach, read [Giving AI Coding Agents an Inbox](https://www.userhat.com/giving-ai-coding-agents-an-inbox/).
 
@@ -16,7 +16,7 @@ For the design rationale behind this approach, read [Giving AI Coding Agents an 
 2. The API returns a unique token and a shareable URL.
 3. The client opens the URL in their browser, sees a branded multi-section form, and fills it in.
 4. Form progress saves automatically to the browser's local storage.
-5. On submission, responses are stored in R2 and the record status updates in Postgres.
+5. On submission, responses are stored in R2 and the record status updates in D1.
 6. The agent retrieves the submitted data via `GET /api/intake/:token`.
 
 ## Multi-brand support
@@ -491,6 +491,7 @@ src/
   lib/
     brands.ts           # Multi-brand configuration
     markdown.ts         # Markdown rendering
+    notify.ts           # Submission notification emails (Cloudflare Email Service)
     storage.ts          # R2 upload, download, and key helpers
     tokens.ts           # Secure token generation
   schema/
@@ -509,8 +510,8 @@ drizzle.config.ts       # Drizzle Kit configuration
 ### Prerequisites
 
 - Node.js 18 or later
-- A NEON Postgres database
 - A Cloudflare account with an R2 bucket named `intake-uploads`
+- A D1 database named `intake-db` (create one with `npx wrangler d1 create intake-db` and set its `database_id` in `wrangler.toml`)
 
 ### Setup
 
@@ -520,10 +521,20 @@ Install dependencies:
 npm install
 ```
 
-Create a `.dev.vars` file with your secrets:
+Create a `.dev.vars` file with your secrets. The database is a Worker binding (`DB` in `wrangler.toml`), so there is no connection string:
 
 ```
-DATABASE_URL=postgresql://user:password@host/database?sslmode=require
+INTAKE_API_KEY=a-local-dev-key
+# Optional — only needed to test presigned uploads locally
+R2_ACCESS_KEY_ID=...
+R2_SECRET_ACCESS_KEY=...
+CF_ACCOUNT_ID=...
+```
+
+Apply the schema to wrangler's local D1 database (repeat for each file in `drizzle/`, in order):
+
+```bash
+npx wrangler d1 execute intake-db --local --file drizzle/0000_gray_felicia_hardy.sql
 ```
 
 Run the development server:
@@ -542,13 +553,19 @@ Generate a migration after changing the schema:
 npm run db:generate
 ```
 
-Push schema changes to the database:
+Apply it to the local database:
 
 ```bash
-npm run db:push
+npx wrangler d1 execute intake-db --local --file drizzle/<generated-file>.sql
 ```
 
-Open Drizzle Studio to browse data:
+Apply it to production:
+
+```bash
+npx wrangler d1 execute intake-db --remote --file drizzle/<generated-file>.sql
+```
+
+Open Drizzle Studio to browse data (needs `CF_ACCOUNT_ID`, `D1_DATABASE_ID`, and `CF_API_TOKEN` in the environment — see `drizzle.config.ts`):
 
 ```bash
 npm run db:studio
@@ -569,6 +586,11 @@ routes = [
 
 [vars]
 ENVIRONMENT = "production"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "intake-db"
+database_id = "your-d1-database-id"
 
 [[r2_buckets]]
 binding = "INTAKE_BUCKET"
@@ -591,7 +613,6 @@ npx wrangler deploy --config wrangler.production.toml
 Set the secrets in Cloudflare:
 
 ```bash
-npx wrangler secret put DATABASE_URL
 npx wrangler secret put INTAKE_API_KEY
 npx wrangler secret put R2_ACCESS_KEY_ID
 npx wrangler secret put R2_SECRET_ACCESS_KEY
@@ -617,7 +638,7 @@ The other key difference is **pre-filling**. The agent does its research first �
 ## Security considerations
 
 - **API authentication**: All `/api/*` routes require a bearer token (`INTAKE_API_KEY`). Client-facing form pages are exempt.
-- **Secrets**: The `.dev.vars` file contains database credentials and the API key, and must not be committed. It is listed in `.gitignore`.
+- **Secrets**: The `.dev.vars` file contains the API key and R2 credentials, and must not be committed. It is listed in `.gitignore`.
 - **Tokens**: Access tokens use a 24-character alphanumeric string generated from `crypto.getRandomValues()`. The alphabet excludes ambiguous characters (0, O, 1, l, I).
 - **Password protection**: Form passwords are hashed with SHA-256 before storage. This is appropriate for low-sensitivity PINs shared via email, not for user account credentials.
 - **File uploads**: Standard uploads are limited to 10 MB per file. Presigned uploads support files up to 500 MB (uploaded directly to R2, bypassing the Worker). Filenames are sanitised to alphanumeric characters, dots, hyphens, and underscores.
