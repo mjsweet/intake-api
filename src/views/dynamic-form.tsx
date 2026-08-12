@@ -711,7 +711,18 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
       } catch(err) {
         // Remove failed upload
         uploadedFiles[fieldId] = uploadedFiles[fieldId].filter(function(f) { return f.id !== tempId; });
-        alert('Failed to upload ' + file.name + '. Please try again.');
+        if (err && err.status === 401) {
+          renderFileList(fileList, uploadedFiles[fieldId]);
+          saveToStorage();
+          alert('Your PIN session has expired. The page will reload so you can enter it again - your answers are saved on this device.');
+          window.location.reload();
+          return;
+        }
+        if (err && err.status === 429) {
+          alert('Too many uploads in the last hour. Please wait a while before adding more files.');
+        } else {
+          alert('Failed to upload ' + file.name + '. Please try again.');
+        }
       }
 
       renderFileList(fileList, uploadedFiles[fieldId]);
@@ -728,7 +739,11 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
       method: 'POST',
       body: fd
     });
-    if (!res.ok) throw new Error('Upload failed');
+    if (!res.ok) {
+      var err = new Error('Upload failed');
+      err.status = res.status;
+      throw err;
+    }
     return await res.json();
   }
 
@@ -744,7 +759,11 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
         category: category
       })
     });
-    if (!presignRes.ok) throw new Error('Presign failed');
+    if (!presignRes.ok) {
+      var presignErr = new Error('Presign failed');
+      presignErr.status = presignRes.status;
+      throw presignErr;
+    }
     var presignData = await presignRes.json();
 
     // Step 2: Upload directly to R2
@@ -768,7 +787,11 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
         category: category
       })
     });
-    if (!confirmRes.ok) throw new Error('Confirm failed');
+    if (!confirmRes.ok) {
+      var confirmErr = new Error('Confirm failed');
+      confirmErr.status = confirmRes.status;
+      throw confirmErr;
+    }
     return await confirmRes.json();
   }
 
@@ -1226,6 +1249,13 @@ export const DynamicFormPage: FC<DynamicFormPageProps> = ({
       if (res.ok) {
         localStorage.removeItem(storageKey);
         window.location.href = '/' + token + '/thanks';
+      } else if (res.status === 401) {
+        alert('Your PIN session has expired. The page will reload so you can enter it again - your answers are saved on this device.');
+        window.location.reload();
+      } else if (res.status === 429) {
+        btnSubmit.disabled = false;
+        btnSubmit.textContent = 'Submit';
+        alert('Too many submissions in the last hour. Please wait a while and try again.');
       } else {
         throw new Error('Submit failed');
       }

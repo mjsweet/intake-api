@@ -1,7 +1,10 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
+import { getCookie, setCookie } from "hono/cookie";
 import { drizzle } from "drizzle-orm/d1";
-import { eq } from "drizzle-orm";
-import { intakeRecords } from "../schema";
+import { eq, and, gt, sql } from "drizzle-orm";
+import { intakeRecords, intakeSubmissions } from "../schema";
+import type { IntakeRecord } from "../schema";
 import {
   downloadFromR2,
   uploadToR2,
@@ -18,12 +21,59 @@ import { ThanksPage } from "../views/thanks";
 import { PasswordGatePage } from "../views/password-gate";
 import { getBrand } from "../lib/brands";
 import { sendSubmissionNotification } from "../lib/notify";
+import { createSubmission, isPlainObject } from "../lib/submissions";
+import {
+  gateCookieName,
+  issueGateValue,
+  verifyGateValue,
+  GATE_TTL_SECONDS,
+} from "../lib/gate";
 import type { Env } from "../index";
 
 const form = new Hono<{ Bindings: Env }>();
 
+// Perpetual links live for years; cap client submissions and uploads per
+// record per hour so a leaked URL cannot flood D1/R2 or the notification
+// inbox. The upload cap is generous — a busy month of wedding galleries stays
+// far below it.
+const MAX_SUBMISSIONS_PER_HOUR = 20;
+const MAX_UPLOADS_PER_HOUR = 100;
+
 function getDb(c: { env: Env }) {
   return drizzle(c.env.DB);
+}
+
+// The password gate page only hides the form render. For the mutation routes
+// the proof of PIN entry is an HttpOnly HMAC cookie set by /verify.
+async function pinGatePassed(
+  c: Context<{ Bindings: Env }>,
+  record: IntakeRecord
+): Promise<boolean> {
+  if (!record.passwordHash) return true;
+  const cookie = getCookie(c, gateCookieName(record.token));
+  return verifyGateValue(
+    c.env.INTAKE_API_KEY,
+    record.token,
+    record.passwordHash,
+    cookie
+  );
+}
+
+async function uploadRateLimited(
+  db: ReturnType<typeof getDb>,
+  record: IntakeRecord
+): Promise<boolean> {
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const [recent] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(intakeFiles)
+    .where(
+      and(
+        eq(intakeFiles.intakeId, record.id),
+        gt(intakeFiles.createdAt, oneHourAgo)
+      )
+    );
+  return Number(recent?.count ?? 0) >= MAX_UPLOADS_PER_HOUR;
 }
 
 async function hashPassword(password: string): Promise<string> {
@@ -81,12 +131,19 @@ form.get("/:token", async (c) => {
     return c.text("This intake form has expired. Please contact us for a new link.", 410);
   }
 
-  if (record.status === "submitted" || record.status === "imported") {
+  // Perpetual forms never close — the same link renders a fresh form after
+  // every submission.
+  if (
+    record.kind !== "perpetual" &&
+    (record.status === "submitted" || record.status === "imported")
+  ) {
     return c.redirect(`/${token}/thanks`);
   }
 
-  // If password-protected, show the gate
-  if (record.passwordHash) {
+  // If password-protected, show the gate (unless a valid gate cookie from an
+  // earlier /verify is presented — lets perpetual-form clients return without
+  // re-entering the PIN every visit).
+  if (record.passwordHash && !(await pinGatePassed(c, record))) {
     const brand = getBrand(c.req.header("host"));
     return c.html(<PasswordGatePage token={token} brand={brand} />);
   }
@@ -130,13 +187,43 @@ form.post("/:token/verify", async (c) => {
     return c.html(<PasswordGatePage token={token} error={true} brand={brand} />);
   }
 
+  // Throttle PIN guessing: the Workers rate-limit binding caps attempts per
+  // token+IP (absent in local dev), and failed attempts carry a small delay.
+  if (c.env.VERIFY_LIMIT) {
+    const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+    const { success } = await c.env.VERIFY_LIMIT.limit({
+      key: `verify:${token}:${ip}`,
+    });
+    if (!success) {
+      return c.text("Too many PIN attempts. Please wait a minute and try again.", 429);
+    }
+  }
+
   const submittedHash = await hashPassword(password);
 
   if (submittedHash !== record.passwordHash) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
     return c.html(<PasswordGatePage token={token} error={true} brand={brand} />);
   }
 
-  // Password correct — mark as sent on first verified view
+  // Password correct — set the gate cookie so submit/upload routes (and
+  // return visits on perpetual forms) can prove the PIN was entered. The
+  // lifetime is enforced server-side by the timestamp inside the value;
+  // maxAge only tells the browser when to drop it.
+  setCookie(
+    c,
+    gateCookieName(token),
+    await issueGateValue(c.env.INTAKE_API_KEY, token, record.passwordHash),
+    {
+      path: `/${token}`,
+      httpOnly: true,
+      secure: true,
+      sameSite: "Lax",
+      maxAge: GATE_TTL_SECONDS,
+    }
+  );
+
+  // Mark as sent on first verified view
   if (record.status === "draft") {
     await db
       .update(intakeRecords)
@@ -166,14 +253,88 @@ form.post("/:token/submit", async (c) => {
     return c.json({ error: "Intake form has expired" }, 410);
   }
 
-  if (record.status === "submitted" || record.status === "imported") {
+  if (
+    record.kind !== "perpetual" &&
+    (record.status === "submitted" || record.status === "imported")
+  ) {
     return c.json({ error: "Form already submitted" }, 409);
+  }
+
+  if (!(await pinGatePassed(c, record))) {
+    return c.json({ error: "PIN verification required" }, 401);
   }
 
   const body = await c.req.json<{
     submitted_data: Record<string, unknown>;
     partial?: boolean;
   }>();
+
+  if (!isPlainObject(body.submitted_data)) {
+    return c.json({ error: "submitted_data must be an object" }, 400);
+  }
+
+  // Perpetual forms append a submission per submit; the record stays open.
+  if (record.kind === "perpetual") {
+    if (body.partial) {
+      return c.json({ success: true, status: record.status });
+    }
+
+    // Cheap pre-check blocks obvious floods before the R2 write; the cap is
+    // then enforced atomically inside createSubmission's INSERT.
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const [recent] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(intakeSubmissions)
+      .where(
+        and(
+          eq(intakeSubmissions.intakeId, record.id),
+          gt(intakeSubmissions.submittedAt, oneHourAgo)
+        )
+      );
+
+    if (Number(recent?.count ?? 0) >= MAX_SUBMISSIONS_PER_HOUR) {
+      return c.json(
+        { error: "Too many submissions — please try again later" },
+        429
+      );
+    }
+
+    const submission = await createSubmission(
+      db,
+      c.env.INTAKE_BUCKET,
+      record,
+      body.submitted_data,
+      { maxPerHour: MAX_SUBMISSIONS_PER_HOUR }
+    );
+
+    if (!submission) {
+      return c.json(
+        { error: "Too many submissions — please try again later" },
+        429
+      );
+    }
+
+    await db
+      .update(intakeRecords)
+      .set({ updatedAt: new Date().toISOString() })
+      .where(eq(intakeRecords.token, token));
+
+    c.executionCtx.waitUntil(
+      sendSubmissionNotification(
+        c.env,
+        c.req.header("host"),
+        record,
+        body.submitted_data,
+        submission.number
+      )
+    );
+
+    return c.json({
+      success: true,
+      status: record.status,
+      submission_number: submission.number,
+    });
+  }
 
   // Store response in R2
   const responseKey = `forms/${token}/response.json`;
@@ -229,8 +390,19 @@ form.post("/:token/upload", async (c) => {
     return c.json({ error: "Intake form has expired" }, 410);
   }
 
-  if (record.status === "submitted" || record.status === "imported") {
+  if (
+    record.kind !== "perpetual" &&
+    (record.status === "submitted" || record.status === "imported")
+  ) {
     return c.json({ error: "Form already submitted" }, 409);
+  }
+
+  if (!(await pinGatePassed(c, record))) {
+    return c.json({ error: "PIN verification required" }, 401);
+  }
+
+  if (await uploadRateLimited(db, record)) {
+    return c.json({ error: "Too many uploads — please try again later" }, 429);
   }
 
   const formData = await c.req.formData();
@@ -292,8 +464,19 @@ form.post("/:token/upload/presign", async (c) => {
     return c.json({ error: "Intake form has expired" }, 410);
   }
 
-  if (record.status === "submitted" || record.status === "imported") {
+  if (
+    record.kind !== "perpetual" &&
+    (record.status === "submitted" || record.status === "imported")
+  ) {
     return c.json({ error: "Form already submitted" }, 409);
+  }
+
+  if (!(await pinGatePassed(c, record))) {
+    return c.json({ error: "PIN verification required" }, 401);
+  }
+
+  if (await uploadRateLimited(db, record)) {
+    return c.json({ error: "Too many uploads — please try again later" }, 429);
   }
 
   const body = await c.req.json<{
@@ -357,8 +540,19 @@ form.post("/:token/upload/confirm", async (c) => {
     return c.json({ error: "Intake form has expired" }, 410);
   }
 
-  if (record.status === "submitted" || record.status === "imported") {
+  if (
+    record.kind !== "perpetual" &&
+    (record.status === "submitted" || record.status === "imported")
+  ) {
     return c.json({ error: "Form already submitted" }, 409);
+  }
+
+  if (!(await pinGatePassed(c, record))) {
+    return c.json({ error: "PIN verification required" }, 401);
+  }
+
+  if (await uploadRateLimited(db, record)) {
+    return c.json({ error: "Too many uploads — please try again later" }, 429);
   }
 
   const body = await c.req.json<{
@@ -419,6 +613,12 @@ form.get("/:token/files/:fileId", async (c) => {
     return c.text("Not found", 404);
   }
 
+  // PIN-protected records serve their files only to gated sessions — the
+  // form's own <img> tags load fine because the gate cookie precedes render.
+  if (!(await pinGatePassed(c, record))) {
+    return c.text("PIN verification required", 401);
+  }
+
   const [file] = await db
     .select()
     .from(intakeFiles)
@@ -458,7 +658,14 @@ form.get("/:token/thanks", async (c) => {
   const projectName = record?.projectName ?? "Your Project";
   const brand = getBrand(c.req.header("host"));
 
-  return c.html(<ThanksPage projectName={projectName} brand={brand} />);
+  return c.html(
+    <ThanksPage
+      projectName={projectName}
+      brand={brand}
+      perpetual={record?.kind === "perpetual"}
+      token={record?.token}
+    />
+  );
 });
 
 export default form;

@@ -93,6 +93,18 @@ export async function deleteFromR2(
   await bucket.delete(key);
 }
 
+// R2 accepts up to 1000 keys per delete call. Batching keeps large cleanups
+// (perpetual forms accumulate submissions for years) inside the Workers
+// per-invocation subrequest limit.
+export async function deleteManyFromR2(
+  bucket: R2Bucket,
+  keys: string[]
+): Promise<void> {
+  for (let i = 0; i < keys.length; i += 1000) {
+    await bucket.delete(keys.slice(i, i + 1000));
+  }
+}
+
 export function buildR2Key(
   token: string,
   filename: string,

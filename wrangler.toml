@@ -33,3 +33,10 @@ bucket_name = "intake-uploads"
 binding = "DB"
 database_name = "intake-db"
 database_id = "cdb21f17-6877-4f28-8952-2b6ab0f7b553"
+
+# Rate limit for PIN verification attempts (10 per minute per token+IP).
+# Optional binding: the worker no-ops when absent.
+[[ratelimits]]
+name = "VERIFY_LIMIT"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }

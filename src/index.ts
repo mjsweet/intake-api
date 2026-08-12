@@ -15,6 +15,8 @@ export interface Env {
   NOTIFY?: EmailSender;
   NOTIFY_TO?: string;
   NOTIFY_FROM?: string;
+  // Workers Rate Limiting binding for PIN verification (optional: no-op when absent)
+  VERIFY_LIMIT?: { limit(options: { key: string }): Promise<{ success: boolean }> };
 }
 
 const app = new Hono<{ Bindings: Env }>();

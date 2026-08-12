@@ -61,12 +61,15 @@ Retrieve response for token [token]
 | GET | `/api/intake/:token` | Get metadata + submitted response |
 | GET | `/api/intake/:token/response` | Get just the submitted response |
 | GET | `/api/intake/:token/definition` | Get the form definition |
-| PUT | `/api/intake/:token` | Submit or update response |
+| PUT | `/api/intake/:token` | Submit or update response (perpetual: appends a submission) |
 | PATCH | `/api/intake/:token/status` | Update status (`draft`, `sent`, `submitted`, `imported`) |
+| GET | `/api/intake/:token/submissions` | List submissions (perpetual; `?status=new` filter) |
+| GET | `/api/intake/:token/submissions/:submissionId` | Get one submission (metadata + data) |
+| PATCH | `/api/intake/:token/submissions/:submissionId/status` | Mark a submission `new` or `imported` |
 | POST | `/api/intake/:token/upload` | Upload a file |
 | GET | `/api/intake/:token/files` | List uploaded files |
 | GET | `/api/intake/:token/files/:fileId` | Download a file |
-| DELETE | `/api/intake/:token` | Delete record, files, and R2 objects |
+| DELETE | `/api/intake/:token` | Delete record, files, submissions, and R2 objects |
 
 **Client-facing pages:**
 
@@ -74,6 +77,24 @@ Retrieve response for token [token]
 |------|---------|
 | `/:token` | Multi-step intake form |
 | `/:token/thanks` | Confirmation page |
+
+---
+
+## Perpetual Forms
+
+A `single` form (the default) accepts one submission, then closes. A `perpetual` form never closes: the client keeps the same URL and PIN, and every submit appends a new **submission** row instead of overwriting the previous response. Use perpetual forms for ongoing client self-service — "add a new page", "publish a new event", "here's this month's video".
+
+| Aspect | `single` | `perpetual` |
+|--------|----------|-------------|
+| After submit | Form closes (409 on resubmit) | Link stays live; thanks page offers "Submit another request" |
+| Response storage | One `response.json`, overwritten | One submission per submit |
+| Record status | `draft` → `sent` → `submitted` → `imported` | Stays `sent` for the life of the form |
+| Processing status | Record-level (`imported`) | Per submission: `new` → `imported` |
+| Default expiry | 30 days | 10 years (override with `expires_in_days`, integer 1–36500) |
+| Notification email | First submission only | Every submission |
+| Rate limit | n/a (closes after one submit) | 20 client submissions and 100 uploads per hour per record |
+
+Create with `"kind": "perpetual"` in the POST body. Always keep the PIN on perpetual forms — the link is long-lived, and the PIN is enforced server-side (a successful `/verify` sets an HttpOnly timestamped HMAC cookie, bound to the password hash and required by the client-facing submit, upload, and file download routes; `/verify` itself is rate limited). Poll `GET /api/intake/:token/submissions?status=new` for unprocessed work, retrieve each submission by id, then PATCH its status to `imported` after processing (never PATCH the record status on a perpetual form).
 
 ---
 

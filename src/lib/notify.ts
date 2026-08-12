@@ -76,7 +76,8 @@ export async function sendSubmissionNotification(
   env: NotifyEnv,
   hostname: string | undefined,
   record: IntakeRecordLike,
-  submittedData: Record<string, unknown>
+  submittedData: Record<string, unknown>,
+  submissionNumber?: number
 ): Promise<void> {
   if (!env.NOTIFY) return;
 
@@ -84,7 +85,13 @@ export async function sendSubmissionNotification(
     const brand = getBrand(hostname);
     const to = env.NOTIFY_TO || DEFAULT_TO;
     const rows = flattenAnswers(submittedData);
-    const subject = `Intake submitted: ${record.projectName}`;
+    const subject = submissionNumber
+      ? `Intake submitted: ${record.projectName} (submission #${submissionNumber})`
+      : `Intake submitted: ${record.projectName}`;
+
+    const retrievePath = submissionNumber
+      ? `https://intake.platform21.com.au/api/intake/${record.token}/submissions?status=new`
+      : `https://intake.platform21.com.au/api/intake/${record.token}/response`;
 
     const textLines = [
       `${brand.name} intake form submitted.`,
@@ -92,12 +99,13 @@ export async function sendSubmissionNotification(
       `Project: ${record.projectName}`,
       `Workflow: ${record.workflow}${record.mode ? ` (${record.mode})` : ""}`,
       `Token: ${record.token}`,
+      ...(submissionNumber ? [`Submission: #${submissionNumber} (perpetual form)`] : []),
       "",
       "Key answers:",
       ...rows.map(([k, v]) => `  ${k}: ${v}`),
       "",
       "Retrieve the full response with the discovery agent, or:",
-      `  GET https://intake.platform21.com.au/api/intake/${record.token}/response`,
+      `  GET ${retrievePath}`,
     ];
 
     const html = `
@@ -105,7 +113,7 @@ export async function sendSubmissionNotification(
       <p style="margin:0 0 16px">
         <strong>Project:</strong> ${escapeHtml(record.projectName)}<br>
         <strong>Workflow:</strong> ${escapeHtml(record.workflow)}${record.mode ? ` (${escapeHtml(record.mode)})` : ""}<br>
-        <strong>Token:</strong> ${escapeHtml(record.token)}
+        <strong>Token:</strong> ${escapeHtml(record.token)}${submissionNumber ? `<br>\n        <strong>Submission:</strong> #${submissionNumber} (perpetual form)` : ""}
       </p>
       <table cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:14px">
         ${rows
@@ -117,7 +125,7 @@ export async function sendSubmissionNotification(
       </table>
       <p style="margin:16px 0 0;color:#555;font-size:13px">
         Retrieve the full response with the discovery agent, or
-        <code>GET https://intake.platform21.com.au/api/intake/${escapeHtml(record.token)}/response</code>
+        <code>GET ${escapeHtml(retrievePath)}</code>
       </p>`;
 
     const response = await env.NOTIFY.send({

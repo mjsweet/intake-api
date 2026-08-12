@@ -60,6 +60,8 @@ POST /api/intake
 | `project_name` | string | Yes | Display name for the project |
 | `workflow` | string | Yes | `migrate` or `newsite` |
 | `mode` | string | No | `full`, `prd`, `autonomous`, or `quickstart`. Defaults to `full` |
+| `kind` | string | No | `single` (default) or `perpetual`. See [Perpetual forms](#perpetual-forms) |
+| `expires_in_days` | number | No | Link lifetime in days (integer, 1–36500). Defaults to 30 for `single`, 3650 for `perpetual` |
 | `form_definition` | object | Yes | Sections and fields that define the form (see Form definitions below) |
 | `password` | string | No | If set, clients must enter this password before viewing the form |
 
@@ -74,7 +76,7 @@ POST /api/intake
 }
 ```
 
-Forms expire 30 days after creation.
+Single forms expire 30 days after creation by default; perpetual forms after 10 years. Override either with `expires_in_days`.
 
 ### Get intake metadata
 
@@ -82,7 +84,7 @@ Forms expire 30 days after creation.
 GET /api/intake/:token
 ```
 
-Returns the record metadata and the submitted response (if one exists). Returns `410 Gone` if the form has expired.
+Returns the record metadata and the submitted response (if one exists). Returns `410 Gone` if the form has expired. For perpetual forms, `response` holds the latest submission and the payload also includes `submission_count`, `new_submission_count`, and `last_submitted_at`.
 
 ### Get form definition
 
@@ -98,7 +100,50 @@ Returns the original form definition stored in R2.
 GET /api/intake/:token/response
 ```
 
-Returns only the submitted response data from R2. Returns `404` if no response has been submitted.
+Returns only the submitted response data from R2. Returns `404` if no response has been submitted. For perpetual forms this returns the latest submission's data.
+
+### Perpetual forms
+
+A `single` form (the default) accepts one submission, then closes: the client is redirected to the thanks page and further submits return `409`. A `perpetual` form never closes. The same link renders a fresh form after every submission, and each submit appends a new **submission** instead of overwriting the previous response. Clients can bookmark the link and return whenever they need something new — a new page, event, video, or gallery.
+
+Each submission has its own lifecycle status: `new` (unprocessed) or `imported` (processed by an agent). The parent record's status stays `sent` for the life of the form. A notification email fires on every submission.
+
+Because the link is long-lived, the client-facing routes carry abuse protection:
+
+- Submissions are rate limited to 20 per record per hour, uploads to 100 per record per hour (`429` beyond).
+- On PIN-protected forms, the submit, upload, and file download routes require proof of PIN entry: a successful `/verify` sets an HttpOnly cookie holding a timestamped HMAC bound to the token and password hash. The 30-day lifetime is enforced server-side, and the value is invalidated if the record's password changes.
+- `/verify` itself is throttled (10 attempts per minute per token+IP via the Workers rate-limit binding, when configured) and failed attempts carry a delay.
+
+Agent-facing `/api/*` routes use the bearer token as before and are not rate limited.
+
+**List submissions:**
+
+```
+GET /api/intake/:token/submissions
+GET /api/intake/:token/submissions?status=new
+```
+
+Returns `[{ id, number, status, submitted_at }, ...]`, newest first. Filter by `status=new` or `status=imported`; `limit` caps the page size (default 100, max 500).
+
+**Get one submission (metadata + data):**
+
+```
+GET /api/intake/:token/submissions/:submissionId
+```
+
+Returns `{ id, number, status, submitted_at, data }` where `data` is the submitted form payload.
+
+**Mark a submission processed:**
+
+```
+PATCH /api/intake/:token/submissions/:submissionId/status
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `status` | string | Yes | `new` or `imported` |
+
+File uploads work unchanged: uploaded file IDs are referenced from each submission's `_uploaded_files` payload, so files remain associated with the submission that provided them.
 
 ### Submit or update a response
 
@@ -112,6 +157,8 @@ PUT /api/intake/:token
 |-------|------|----------|-------------|
 | `submitted_data` | object | Yes | Key-value pairs of form field responses |
 | `partial` | boolean | No | If `true`, saves progress without marking as submitted |
+
+For perpetual forms, each non-partial `PUT` creates a new submission (returned in the response as `submission`). Partial saves are not supported for perpetual forms and return `400`.
 
 ### Update status
 
@@ -371,7 +418,7 @@ After form creation, save a copy of `definition.json`. After retrieving a submis
 
 ## Database schema
 
-Two tables in NEON Postgres, managed by Drizzle ORM.
+Three tables in Cloudflare D1 (SQLite), managed by Drizzle ORM.
 
 ### `intake_records`
 
@@ -382,12 +429,26 @@ Two tables in NEON Postgres, managed by Drizzle ORM.
 | `project_name` | VARCHAR(255) | Project display name |
 | `workflow` | ENUM | `migrate` or `newsite` |
 | `mode` | ENUM | `full`, `prd`, `autonomous`, or `quickstart` |
+| `kind` | ENUM | `single` (default) or `perpetual` |
 | `status` | ENUM | `draft`, `sent`, `submitted`, or `imported` |
 | `password_hash` | VARCHAR(128) | SHA-256 hash of access password (nullable) |
 | `created_at` | TIMESTAMP | Record creation time |
 | `updated_at` | TIMESTAMP | Last modification time |
 | `submitted_at` | TIMESTAMP | Form submission time (nullable) |
-| `expires_at` | TIMESTAMP | Expiry date (30 days from creation) |
+| `expires_at` | TIMESTAMP | Expiry date (default 30 days; 10 years for perpetual) |
+
+### `intake_submissions`
+
+One row per submit on a perpetual form. Unique on (`intake_id`, `number`).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `intake_id` | UUID | Foreign key to `intake_records` |
+| `number` | INTEGER | 1-based submission number, allocated atomically |
+| `status` | ENUM | `new` or `imported` |
+| `r2_key` | VARCHAR(512) | Payload path in R2 |
+| `submitted_at` | TIMESTAMP | Submission time |
 
 ### `intake_files`
 
@@ -408,9 +469,10 @@ Two tables in NEON Postgres, managed by Drizzle ORM.
 Form definitions, responses, and uploaded files are stored in Cloudflare R2.
 
 ```
-forms/{token}/definition.json    # Form structure (sections, fields, pre-filled values)
-forms/{token}/response.json      # Submitted client responses
-intake/{token}/{category}/{file} # Uploaded files (logos, photos, documents)
+forms/{token}/definition.json         # Form structure (sections, fields, pre-filled values)
+forms/{token}/response.json           # Submitted client responses (single forms)
+forms/{token}/submissions/{id}.json   # One payload per submission (perpetual forms)
+intake/{token}/{category}/{file}      # Uploaded files (logos, photos, documents)
 ```
 
 ## Project structure
@@ -513,7 +575,13 @@ binding = "INTAKE_BUCKET"
 bucket_name = "intake-uploads"
 ```
 
-This file is gitignored. Deploy with:
+This file is gitignored. **Apply pending D1 migrations before deploying** — the worker selects columns the migration adds (e.g. `kind`), so deploying first would 500 every route that touches `intake_records`:
+
+```bash
+npx wrangler d1 execute intake-db --remote --file drizzle/<pending-migration>.sql
+```
+
+Then deploy:
 
 ```bash
 export CLOUDFLARE_ACCOUNT_ID=your-account-id

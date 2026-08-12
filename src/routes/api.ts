@@ -1,12 +1,18 @@
 import { Hono } from "hono";
 import { drizzle } from "drizzle-orm/d1";
-import { eq } from "drizzle-orm";
-import { intakeRecords, intakeFiles } from "../schema";
+import { eq, and, desc, sql } from "drizzle-orm";
+import { intakeRecords, intakeFiles, intakeSubmissions } from "../schema";
 import { generateToken } from "../lib/tokens";
+import {
+  createSubmission,
+  serialiseSubmission,
+  isPlainObject,
+  safeJsonParse,
+} from "../lib/submissions";
 import {
   uploadToR2,
   downloadFromR2,
-  deleteFromR2,
+  deleteManyFromR2,
   buildR2Key,
   generatePresignedUploadUrl,
   isAllowedMimeType,
@@ -42,6 +48,8 @@ api.post("/intake", async (c) => {
     project_name: string;
     workflow: "migrate" | "newsite";
     mode?: "full" | "prd" | "autonomous" | "quickstart";
+    kind?: "single" | "perpetual";
+    expires_in_days?: number;
     form_definition: Record<string, unknown>;
     password?: string;
   }>();
@@ -50,9 +58,28 @@ api.post("/intake", async (c) => {
     return c.json({ error: "form_definition is required" }, 400);
   }
 
+  const kind = body.kind ?? "single";
+  if (kind !== "single" && kind !== "perpetual") {
+    return c.json({ error: "kind must be 'single' or 'perpetual'" }, 400);
+  }
+
   const token = generateToken();
+  // Perpetual links are meant to be bookmarked and reused, so they get a
+  // 10-year window by default; single forms keep the 30-day default. The cap
+  // keeps the Date arithmetic inside the representable range.
+  const expiresInDays = body.expires_in_days ?? (kind === "perpetual" ? 3650 : 30);
+  if (
+    !Number.isInteger(expiresInDays) ||
+    expiresInDays < 1 ||
+    expiresInDays > 36500
+  ) {
+    return c.json(
+      { error: "expires_in_days must be an integer between 1 and 36500" },
+      400
+    );
+  }
   const expiry = new Date();
-  expiry.setDate(expiry.getDate() + 30);
+  expiry.setDate(expiry.getDate() + expiresInDays);
   const expiresAt = expiry.toISOString();
 
   const passwordHash = body.password
@@ -66,6 +93,7 @@ api.post("/intake", async (c) => {
       projectName: body.project_name,
       workflow: body.workflow,
       mode: body.mode ?? "full",
+      kind,
       status: "draft",
       expiresAt,
       passwordHash,
@@ -111,15 +139,48 @@ api.get("/intake/:token", async (c) => {
     return c.json({ error: "Intake form has expired" }, 410);
   }
 
-  // Fetch response from R2 if it exists
+  // Fetch response from R2 if it exists. For perpetual forms the "response"
+  // is the latest submission; use the submissions endpoints for the full set.
   let response: Record<string, unknown> | null = null;
-  const responseObj = await downloadFromR2(
-    c.env.INTAKE_BUCKET,
-    `forms/${token}/response.json`
-  );
-  if (responseObj) {
-    const text = await responseObj.text();
-    response = JSON.parse(text);
+  let submissionSummary: Record<string, unknown> = {};
+
+  if (record.kind === "perpetual") {
+    const [latest] = await db
+      .select()
+      .from(intakeSubmissions)
+      .where(eq(intakeSubmissions.intakeId, record.id))
+      .orderBy(desc(intakeSubmissions.number))
+      .limit(1);
+
+    if (latest) {
+      const obj = await downloadFromR2(c.env.INTAKE_BUCKET, latest.r2Key);
+      if (obj) {
+        response = safeJsonParse(await obj.text());
+      }
+    }
+
+    const [counts] = await db
+      .select({
+        total: sql<number>`count(*)`,
+        fresh: sql<number>`sum(case when status = 'new' then 1 else 0 end)`,
+      })
+      .from(intakeSubmissions)
+      .where(eq(intakeSubmissions.intakeId, record.id));
+
+    submissionSummary = {
+      submission_count: Number(counts?.total ?? 0),
+      new_submission_count: Number(counts?.fresh ?? 0),
+      last_submitted_at: latest?.submittedAt ?? null,
+    };
+  } else {
+    const responseObj = await downloadFromR2(
+      c.env.INTAKE_BUCKET,
+      `forms/${token}/response.json`
+    );
+    if (responseObj) {
+      const text = await responseObj.text();
+      response = safeJsonParse(text);
+    }
   }
 
   return c.json({
@@ -128,13 +189,134 @@ api.get("/intake/:token", async (c) => {
     project_name: record.projectName,
     workflow: record.workflow,
     mode: record.mode,
+    kind: record.kind,
     status: record.status,
     response,
+    ...submissionSummary,
     created_at: record.createdAt,
     updated_at: record.updatedAt,
     submitted_at: record.submittedAt,
     expires_at: record.expiresAt,
   });
+});
+
+// GET /api/intake/:token/submissions - List submissions (perpetual forms)
+// Optional ?status=new|imported filter.
+api.get("/intake/:token/submissions", async (c) => {
+  const db = getDb(c);
+  const token = c.req.param("token");
+  const statusFilter = c.req.query("status");
+
+  if (statusFilter && statusFilter !== "new" && statusFilter !== "imported") {
+    return c.json({ error: "status filter must be 'new' or 'imported'" }, 400);
+  }
+
+  const [record] = await db
+    .select()
+    .from(intakeRecords)
+    .where(eq(intakeRecords.token, token))
+    .limit(1);
+
+  if (!record) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const where = statusFilter
+    ? and(
+        eq(intakeSubmissions.intakeId, record.id),
+        eq(intakeSubmissions.status, statusFilter as "new" | "imported")
+      )
+    : eq(intakeSubmissions.intakeId, record.id);
+
+  const rawLimit = c.req.query("limit");
+  const requestedLimit = rawLimit ? Number(rawLimit) : NaN;
+  const limit =
+    Number.isInteger(requestedLimit) && requestedLimit >= 1
+      ? Math.min(requestedLimit, 500)
+      : 100;
+
+  const submissions = await db
+    .select()
+    .from(intakeSubmissions)
+    .where(where)
+    .orderBy(desc(intakeSubmissions.number))
+    .limit(limit);
+
+  return c.json(submissions.map(serialiseSubmission));
+});
+
+// GET /api/intake/:token/submissions/:submissionId - Metadata + submitted data
+api.get("/intake/:token/submissions/:submissionId", async (c) => {
+  const db = getDb(c);
+  const token = c.req.param("token");
+  const submissionId = c.req.param("submissionId");
+
+  const [record] = await db
+    .select()
+    .from(intakeRecords)
+    .where(eq(intakeRecords.token, token))
+    .limit(1);
+
+  if (!record) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const [submission] = await db
+    .select()
+    .from(intakeSubmissions)
+    .where(eq(intakeSubmissions.id, submissionId))
+    .limit(1);
+
+  if (!submission || submission.intakeId !== record.id) {
+    return c.json({ error: "Submission not found" }, 404);
+  }
+
+  let data: Record<string, unknown> | null = null;
+  const obj = await downloadFromR2(c.env.INTAKE_BUCKET, submission.r2Key);
+  if (obj) {
+    data = safeJsonParse(await obj.text());
+  }
+
+  return c.json({ ...serialiseSubmission(submission), data });
+});
+
+// PATCH /api/intake/:token/submissions/:submissionId/status - Mark processed
+api.patch("/intake/:token/submissions/:submissionId/status", async (c) => {
+  const db = getDb(c);
+  const token = c.req.param("token");
+  const submissionId = c.req.param("submissionId");
+  const { status } = await c.req.json<{ status: string }>();
+
+  if (status !== "new" && status !== "imported") {
+    return c.json({ error: "status must be 'new' or 'imported'" }, 400);
+  }
+
+  const [record] = await db
+    .select()
+    .from(intakeRecords)
+    .where(eq(intakeRecords.token, token))
+    .limit(1);
+
+  if (!record) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const [submission] = await db
+    .select()
+    .from(intakeSubmissions)
+    .where(eq(intakeSubmissions.id, submissionId))
+    .limit(1);
+
+  if (!submission || submission.intakeId !== record.id) {
+    return c.json({ error: "Submission not found" }, 404);
+  }
+
+  await db
+    .update(intakeSubmissions)
+    .set({ status })
+    .where(eq(intakeSubmissions.id, submissionId));
+
+  return c.json({ success: true, status });
 });
 
 // GET /api/intake/:token/definition - Get form definition from R2
@@ -153,9 +335,37 @@ api.get("/intake/:token/definition", async (c) => {
   return c.json(JSON.parse(text));
 });
 
-// GET /api/intake/:token/response - Get form response from R2
+// GET /api/intake/:token/response - Get form response from R2.
+// For perpetual forms this returns the latest submission's data, so agents
+// using the classic response endpoint still see something sensible.
 api.get("/intake/:token/response", async (c) => {
+  const db = getDb(c);
   const token = c.req.param("token");
+
+  const [record] = await db
+    .select()
+    .from(intakeRecords)
+    .where(eq(intakeRecords.token, token))
+    .limit(1);
+
+  if (record?.kind === "perpetual") {
+    const [latest] = await db
+      .select()
+      .from(intakeSubmissions)
+      .where(eq(intakeSubmissions.intakeId, record.id))
+      .orderBy(desc(intakeSubmissions.number))
+      .limit(1);
+
+    if (!latest) {
+      return c.json({ error: "No response found" }, 404);
+    }
+
+    const obj = await downloadFromR2(c.env.INTAKE_BUCKET, latest.r2Key);
+    if (!obj) {
+      return c.json({ error: "No response found" }, 404);
+    }
+    return c.json(safeJsonParse(await obj.text()) ?? {});
+  }
 
   const obj = await downloadFromR2(
     c.env.INTAKE_BUCKET,
@@ -166,7 +376,7 @@ api.get("/intake/:token/response", async (c) => {
   }
 
   const text = await obj.text();
-  return c.json(JSON.parse(text));
+  return c.json(safeJsonParse(text) ?? {});
 });
 
 // PUT /api/intake/:token - Submit/update form response (stored in R2)
@@ -190,6 +400,54 @@ api.put("/intake/:token", async (c) => {
 
   if (record.expiresAt < new Date().toISOString()) {
     return c.json({ error: "Intake form has expired" }, 410);
+  }
+
+  if (!isPlainObject(body.submitted_data)) {
+    return c.json({ error: "submitted_data must be an object" }, 400);
+  }
+
+  // Perpetual forms append a submission per PUT instead of overwriting a
+  // single response; drafts live in the browser, so partial saves are not
+  // supported for them.
+  if (record.kind === "perpetual") {
+    if (body.partial) {
+      return c.json(
+        { error: "Partial saves are not supported for perpetual forms" },
+        400
+      );
+    }
+
+    const submission = await createSubmission(
+      db,
+      c.env.INTAKE_BUCKET,
+      record,
+      body.submitted_data
+    );
+
+    if (!submission) {
+      return c.json({ error: "Failed to store submission" }, 500);
+    }
+
+    await db
+      .update(intakeRecords)
+      .set({ updatedAt: new Date().toISOString() })
+      .where(eq(intakeRecords.token, token));
+
+    c.executionCtx.waitUntil(
+      sendSubmissionNotification(
+        c.env,
+        c.req.header("host"),
+        record,
+        body.submitted_data,
+        submission.number
+      )
+    );
+
+    return c.json({
+      success: true,
+      status: record.status,
+      submission: serialiseSubmission(submission),
+    });
   }
 
   // Store response in R2
@@ -487,28 +745,42 @@ api.delete("/intake/:token", async (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  // Delete uploaded files from R2 and database
   const files = await db
     .select()
     .from(intakeFiles)
     .where(eq(intakeFiles.intakeId, record.id));
 
-  for (const file of files) {
-    await deleteFromR2(c.env.INTAKE_BUCKET, file.r2Key);
-  }
+  const submissions = await db
+    .select()
+    .from(intakeSubmissions)
+    .where(eq(intakeSubmissions.intakeId, record.id));
+
+  // Batched R2 deletes (1000 keys per call) keep even long-lived perpetual
+  // forms well inside the Workers subrequest limit.
+  await deleteManyFromR2(c.env.INTAKE_BUCKET, [
+    ...files.map((f) => f.r2Key),
+    ...submissions.map((s) => s.r2Key),
+    `forms/${token}/definition.json`,
+    `forms/${token}/response.json`,
+  ]);
 
   if (files.length > 0) {
     await db.delete(intakeFiles).where(eq(intakeFiles.intakeId, record.id));
   }
 
-  // Delete form definition and response from R2
-  await deleteFromR2(c.env.INTAKE_BUCKET, `forms/${token}/definition.json`);
-  await deleteFromR2(c.env.INTAKE_BUCKET, `forms/${token}/response.json`);
+  if (submissions.length > 0) {
+    await db
+      .delete(intakeSubmissions)
+      .where(eq(intakeSubmissions.intakeId, record.id));
+  }
 
   // Delete the record
   await db.delete(intakeRecords).where(eq(intakeRecords.token, token));
 
-  return c.json({ success: true, deleted: { record: 1, files: files.length } });
+  return c.json({
+    success: true,
+    deleted: { record: 1, files: files.length, submissions: submissions.length },
+  });
 });
 
 export default api;
